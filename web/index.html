@@ -1,0 +1,77 @@
+<?xml version="1.0"?>
+
+<html>
+<head>
+  <title>BasketCase</title>
+</head>
+<body>
+
+<h1> BasketCase </h1>
+
+<blockquote>  
+BasketCase is a (Ruby) script that encapsulates the Rational ClearCase
+command-line interface, "<code>cleartool</code>", making it (slightly) more
+comfortable for developers more used to non-locking version-control systems
+such as CVS or Subversion.
+</blockquote>
+
+<h2>Features</h2>
+
+<p>BasketCase can help you:</p>
+
+<ul>
+  <li><strong>List</strong> modified elements.</li>
+  <li><strong>Update</strong> a snapshot view, with <strong>automatic
+  merge</strong> of changes to checked-out elements.</li>
+  <li><strong>Check-out</strong> (unreserved) and <strong>check-in</strong>
+  elements.</li>
+  <li><strong>Undo a check-out</strong>, reverting to the base version.</li>
+  <li><strong>Add</strong>, <strong>remove</strong> and
+  <strong>rename</strong> elements.</li>
+  <li>Display <strong>differences</strong> for modified elements.</li>
+  <li>Display <strong>change-logs</strong> and
+  <strong>version-trees</strong>.</li>
+</ul>
+
+<p>
+All of the above will seem rather banal to CVS/Subversion users; that's the
+point - BasketCase is intended to make ClearCase usage intuitive and
+straightforward, ie. boring.
+</p>
+
+<h2>Getting BasketCase</h2>
+
+<p>You can grab the <a
+href="http://rubyforge.org/plugins/scmsvn/viewcvs.php/*checkout*/trunk/bin/basketcase.rb?root=basketcase">latest
+version of <code>basketcase.rb</code></a> directly from RubyForge SVN.</p>
+
+<h2>Why BasketCase?</h2>
+
+<p>
+In May 2006, Mike Williams was stuck on a client project which (despite the
+team's wishes) was stuck using ClearCase as it's version-control system.
+He wrote BasketCase in frustration.
+</p>
+
+<p>
+The team was attempting to use Agile practices such as collective code
+ownership, refactoring and continuous-integration, and ClearCase was in the
+way:
+</p>
+
+<ul>
+  <li>Depending on the setup, ClearCase likes to do "reserved" check-outs
+  of elements, preventing collective code ownership.</li>
+  <li>When add, removing or moving elements, ClearCase will sometimes apply
+  the change to the repository immediately, without waiting for a
+  "commit".</li>
+  <li>When updating, ClearCase will not attempt to merge other developers'
+  changes to elements you have checked-out; this can leave your view in an
+  inconsistent state.</li>
+  <li>Performing an automatic merge from the command-line requires an
+  unwieldy, obscure command.</li>
+  <li>There is no easy way to do a bulk-commit.</li>
+</ul>
+
+</body>
+</html>
