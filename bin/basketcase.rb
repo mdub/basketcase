@@ -6,7 +6,7 @@
 #
 # Warning: this script is EXPERIMENTAL: use AT YOUR OWN RISK
 #
-# @author Mike Williams <mdub@dogbiscuit.org>
+# @author Mike Williams
 
 $USAGE = <<EOF
 usage: basketcase <command> [<options>]
@@ -89,6 +89,7 @@ ignore %r{\.LST$}
 ignore %r{\.ant-targets-}
 ignore %r{\.class$}
 ignore %r{\.contrib$}
+ignore %r{\.contrib\.\d+$}
 ignore %r{\.iws$}
 ignore %r{\.jar$}
 ignore %r{\.jasper$}
@@ -154,6 +155,7 @@ class Command
   def initialize()
     @listener = DefaultListener.new
     @recursive = false
+    @graphical = false
   end
 
   def report(status, path, version = nil)
@@ -165,6 +167,12 @@ class Command
   end
 
   alias :option_r :option_recurse
+
+  def option_graphical
+    @graphical = true
+  end
+
+  alias :option_g :option_graphical
 
   # Handle command-line arguments:
   # - For option arguments of the form "-X", call the corresponding
@@ -237,8 +245,9 @@ class LsCommand < Command
   alias :option_a :option_all
 
   def execute
-    recurse_arg = @recursive ? '-r' : ''
-    cleartool("ls #{recurse_arg} #{effective_targets}") do |line|  
+    args = ''
+    args += ' -r' if @recursive
+    cleartool("ls #{args} #{effective_targets}") do |line|  
       case line
       when /^(\S+)@@(\S+) \[hijacked\]/
         report(:HIJACK, mkpath($1), $2)
@@ -300,7 +309,13 @@ class UpdateCommand < Command
   end
 
   def execute_merge
-    action = $test_mode ? "-print" : "-merge -gmerge"
+    action = if $test_mode 
+               "-print" 
+             elsif @graphical
+               "-gmerge"
+             else
+               "-merge -gmerge"
+             end
     cleartool("findmerge #{effective_targets} -log nul -flatest #{action}") do |line|
       case line
       when /^Needs Merge "(.+)" \[to \S+ from (\S+) base (\S+)\]/
@@ -355,14 +370,14 @@ class UncheckoutCommand < Command
   
   def initialize
     super
-    @action = '-rm'
-  end
-  
-  def option_keep
     @action = '-keep'
   end
   
-  alias :option_k :option_keep
+  def option_rm
+    @action = '-rm'
+  end
+  
+  alias :option_r :option_rm
 
   def execute
     cleartool("uncheckout #{@action} #{specified_targets}") do |line|
@@ -373,6 +388,8 @@ class UncheckoutCommand < Command
         # ignore
       when /^Checkout cancelled for "(.+)"\./
         report(:UNCO, mkpath($1))
+      when /^Private version .* saved in "(.+)"\./
+        report(:KEPT, mkpath($1))
       else
         cannot_deal_with line
       end
@@ -388,7 +405,7 @@ class RemoveCommand < Command
       case line
       when /^Unloaded /
         # ignore
-      when /^Removed "(.+)".\./
+      when /^Removed "(.+)"\./
         report(:RM, mkpath($1))
       else
         cannot_deal_with line
@@ -417,20 +434,40 @@ end
 
 class DiffCommand < Command
   
-  def option_graphical
-    @format = '-graphical'
-  end
-  
-  alias :option_g :option_graphical
-
   def execute
+    args = ''
+    args += ' -graphical' if @graphical
     @targets.each do |target|
-      cleartool("diff #{@format} #{target}@@\\main\\LATEST #{target}") do |line|
+      cleartool("diff #{args} #{target}@@\\main\\LATEST #{target}") do |line|
         puts line
       end
     end
   end
 
+end
+
+class LogCommand < Command
+  
+  def execute
+    args = ''
+    args += ' -graphical' if @graphical
+    cleartool("lshistory #{args} #{effective_targets}") do |line|
+      puts line
+    end
+  end
+  
+end
+
+class VersionTreeCommand < Command
+  
+  def execute
+    args = ''
+    args += ' -graphical' if @graphical
+    cleartool("lsvtree #{args} #{effective_targets}") do |line|
+      puts line
+    end
+  end
+  
 end
 
 #---( Command-line processing )---
@@ -455,6 +492,10 @@ class CommandLine
       AddCommand.new
     when 'diff'
       DiffCommand.new
+    when 'log', 'history'
+      LogCommand.new
+    when 'tree', 'vtree'
+      VersionTreeCommand.new
     else
       raise "Unknown command: " + name
     end
@@ -490,7 +531,8 @@ CommandLine.new.do(*ARGV)
 
 # TODO:
 # - auto-checkout of parent directory for add/rm
-# - mv/rn
-# - diff
+# - mv/rename
 # - addlocal
 # - rmmissing
+# - automatic uncheckout of removed elements
+# - automatic uncheckout of files that can't be merged (for Durran)
