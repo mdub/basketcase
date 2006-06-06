@@ -65,6 +65,7 @@ require 'pathname'
 
 #---( Globals )---
 
+$cwd = Pathname.new('.').expand_path
 $test_mode = false
 $debug_mode = false
 
@@ -107,7 +108,7 @@ ignore %r{~$}
 #---( Utilities )---
 
 def mkpath(path)
-  Pathname.new(path.tr('\\', '/').sub(%r{^./},''))
+  Pathname.new(path.to_str.tr('\\', '/').sub(%r{^./},''))
 end
 
 def log_debug(msg)
@@ -145,12 +146,43 @@ class DefaultListener
   
 end
 
+#---( Target list )---
+
+class TargetList
+
+  include Enumerable
+
+  def initialize(targets)
+    @target_paths = targets.map { |t| mkpath(t) }
+  end
+  
+  def each
+    @target_paths.each do |t|
+      yield(t)
+    end
+  end
+  
+  def to_s
+    @target_paths.join(" ")
+  end
+
+  def empty?
+    @target_paths.empty?
+  end
+
+  def parents
+    TargetList.new(@target_paths.map { |t| t.parent }.uniq)
+  end
+
+end
+
 #---( Commands )---
 
 # Base ClearCase command
 class Command
 
   attr_writer :listener
+  attr_writer :targets
 
   def initialize()
     @listener = DefaultListener.new
@@ -192,12 +224,12 @@ class Command
   end
 
   def effective_targets
-    @targets.empty? ? '.' : @targets.join(' ')
+    TargetList.new(@targets.empty? ? ['.'] : @targets)
   end
 
   def specified_targets
     raise "No target specified" if @targets.empty? 
-    @targets.join(' ')
+    TargetList.new(@targets)
   end
   
   private
@@ -235,7 +267,6 @@ class LsCommand < Command
   def initialize()
     super
     @recurse_arg = '-r'
-    @include_all = false
   end
 
   def option_all
@@ -244,9 +275,16 @@ class LsCommand < Command
 
   alias :option_a :option_all
 
+  def option_directory
+    @directory_only = true
+  end
+
+  alias :option_d :option_directory
+
   def execute
     args = ''
-    args += ' -r' if @recursive
+    args += ' -recurse' if @recursive
+    args += ' -directory' if @directory_only
     cleartool("ls #{args} #{effective_targets}") do |line|  
       case line
       when /^(\S+)@@(\S+) \[hijacked\]/
@@ -257,7 +295,9 @@ class LsCommand < Command
         next unless @include_all
         report(:OK, mkpath($1), $2)
       when /^(\S+)@@\S+ from (\S+)/
-        report(:CO, mkpath($1), $2)
+        element_path = mkpath($1)
+        status = element_path.exist? ? :CO : :MISSING
+        report(status, element_path, $2)
       when /^(\S+)/ 
         path = mkpath($1)
         next if ignored?(path)
@@ -278,16 +318,19 @@ class UpdateCommand < Command
 
   def relative_path(s)
     raise '@root not defined' unless(@root)
-    mkpath(s).relative_path_from(@root)
+    full_path = @root + mkpath(s)
+    full_path.relative_path_from($cwd)
   end
 
-  def execute_update
-    @root = nil
+  def execute_update 
+    cleartool("pwv -root") do |line|
+      @root = mkpath(line.chomp)
+    end
     action = $test_mode ? '-print' : ''
-    cleartool("update -log nul #{action} #{effective_targets}") do |line|
+    cleartool("update -log nul -force #{action} #{effective_targets}") do |line|
       case line
       when /^Processing dir "(.*)"/
-        @root ||= mkpath($1)
+        # ignore
       when /^\.*$/
         # ignore
       when /^Making dir "(.*)"/
@@ -334,7 +377,11 @@ end
 class CheckinCommand < Command
   
   def execute
-    raise "checkin not supported in test-mode" if $test_mode
+    puts "Checking-in:"
+    specified_targets.each do |path|
+      puts "  " + path
+    end
+    return if $test_mode
     comment_file = prompt_for_comment
     cleartool("checkin -cfile #{comment_file} #{specified_targets}") do |line|
       case line
@@ -360,6 +407,8 @@ class CheckoutCommand < Command
       case line
       when /^Checked out "(.+)" from version "(\S+)"\./
         report(:CO, mkpath($1), $2)
+      when /^Element "(.+)" is already checked out/
+        report(:CO, mkpath($1), 'already')
       end
     end
   end
@@ -398,9 +447,75 @@ class UncheckoutCommand < Command
 
 end
 
-class RemoveCommand < Command
+class CollectingListener
+
+  attr_reader :elements
+
+  def initialize
+    @elements = []
+  end
+
+  def report(element)
+    @elements << element
+  end
+  
+end
+
+class DirectoryModificationCommand < Command
+
+  def find_locked_elements(paths)
+    ls = LsCommand.new
+    ls.option_a
+    ls.option_d
+    ls.targets = paths
+    collector = CollectingListener.new
+    ls.listener = collector
+    ls.execute
+    collector.elements.find_all { |e| e.status == :OK }.collect { |e| e.path }
+  end
+
+  def checkout(target_list)
+    return if target_list.empty?
+    co = CheckoutCommand.new
+    co.targets = target_list
+    co.execute
+  end
+
+  def unlock_parent_directories(target_list)
+    checkout find_locked_elements(target_list.parents)
+  end
+
+end
+  
+class AutoCheckinCommand < Command
+
+  def find_checkouts
+    ls = LsCommand.new
+    ls.option_a
+    ls.targets = effective_targets
+    collector = CollectingListener.new
+    ls.listener = collector
+    ls.execute
+    collector.elements.find_all { |e| e.status == :CO }.collect { |e| e.path }
+  end
+
+  def execute
+    checked_out_elements = find_checkouts
+    if checked_out_elements.empty?
+      puts "Nothing to check-in" 
+      return
+    end
+    ci = CheckinCommand.new
+    ci.targets = checked_out_elements
+    ci.execute
+  end
+  
+end
+
+class RemoveCommand < DirectoryModificationCommand
   
   def execute
+    unlock_parent_directories(specified_targets)
     cleartool("rmname -ncomment #{specified_targets}") do |line|
       case line
       when /^Unloaded /
@@ -415,9 +530,10 @@ class RemoveCommand < Command
 
 end
 
-class AddCommand < Command
+class AddCommand < DirectoryModificationCommand
   
   def execute
+    unlock_parent_directories(specified_targets)
     cleartool("mkelem -ncomment #{specified_targets}") do |line|
       case line
       when /^Created element /
@@ -490,6 +606,8 @@ class CommandLine
       RemoveCommand.new
     when 'add'
       AddCommand.new
+    when 'auto-checkin', 'auto-ci', 'auto-commit'
+      AutoCheckinCommand.new
     when 'diff'
       DiffCommand.new
     when 'log', 'history'
@@ -530,7 +648,6 @@ end
 CommandLine.new.do(*ARGV)
 
 # TODO:
-# - auto-checkout of parent directory for add/rm
 # - mv/rename
 # - addlocal
 # - rmmissing
