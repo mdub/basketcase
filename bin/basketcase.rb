@@ -41,7 +41,7 @@ COMMANDS:
 
     Undo a checkout, reverting to checked-in version.
 
-    -k(eep)     Retain the existing version in a '.keep' file.
+    -r(emove)   Don\'t retain the existing version in a '.keep' file.
 
 % {remove,rm,delete,del}
 
@@ -91,6 +91,8 @@ ignore %r{\.ant-targets-}
 ignore %r{\.class$}
 ignore %r{\.contrib$}
 ignore %r{\.contrib\.\d+$}
+ignore %r{\.keep$}
+ignore %r{\.keep\.\d+$}
 ignore %r{\.iws$}
 ignore %r{\.jar$}
 ignore %r{\.jasper$}
@@ -178,6 +180,9 @@ end
 
 #---( Commands )---
 
+class UsageException < Exception
+end
+
 # Base ClearCase command
 class Command
 
@@ -215,7 +220,7 @@ class Command
       option = args.shift
       option_method = "option_#{$1}".to_sym
       unless respond_to?(option_method)
-        raise "Unrecognised option: #{option}"
+        raise UsageException, "Unrecognised option: #{option}"
       end
       send(option_method)
     end
@@ -228,7 +233,7 @@ class Command
   end
 
   def specified_targets
-    raise "No target specified" if @targets.empty? 
+    raise UsageException, "No target specified" if @targets.empty? 
     TargetList.new(@targets)
   end
   
@@ -238,10 +243,19 @@ class Command
     log_debug "RUNNING: cleartool #{command}"
     IO.popen("cleartool " + command).each_line do |line|
       log_debug "<<< " + line
-      yield(line) if block_given? 
+      yield(line) if block_given?
     end
   end
     
+  def cleartool_unsafe(command, &block)
+    if $test_mode
+      log_debug "WOULD RUN: cleartool #{command}"
+      return
+    end
+    cleartool(command, &block)
+  end
+    
+
   def cannot_deal_with(line)
     $stderr.puts "unrecognised output: " + line
   end
@@ -264,11 +278,6 @@ end
 
 class LsCommand < Command
 
-  def initialize()
-    super
-    @recurse_arg = '-r'
-  end
-
   def option_all
     @include_all = true
   end
@@ -287,7 +296,7 @@ class LsCommand < Command
     args += ' -directory' if @directory_only
     cleartool("ls #{args} #{effective_targets}") do |line|  
       case line
-      when /^(\S+)@@(\S+) \[hijacked\]/
+      when /^(\S+)@@(\S+) \[hijacked/
         report(:HIJACK, mkpath($1), $2)
       when /^(\S+)@@(\S+) \[loaded but missing\]/
         report(:MISSING, mkpath($1), $2)
@@ -326,8 +335,9 @@ class UpdateCommand < Command
     cleartool("pwv -root") do |line|
       @root = mkpath(line.chomp)
     end
-    action = $test_mode ? '-print' : ''
-    cleartool("update -log nul -force #{action} #{effective_targets}") do |line|
+    args = '-log nul -force'
+    args += ' -print' if $test_mode
+    cleartool("update #{args} #{effective_targets}") do |line|
       case line
       when /^Processing dir "(.*)"/
         # ignore
@@ -352,14 +362,15 @@ class UpdateCommand < Command
   end
 
   def execute_merge
-    action = if $test_mode 
-               "-print" 
-             elsif @graphical
-               "-gmerge"
-             else
-               "-merge -gmerge"
-             end
-    cleartool("findmerge #{effective_targets} -log nul -flatest #{action}") do |line|
+    args = '-log nul -flatest '
+    if $test_mode 
+      args += "-print" 
+    elsif @graphical
+      args += "-gmerge"
+    else
+      args += "-merge -gmerge"
+    end
+    cleartool("findmerge #{effective_targets} #{args}") do |line|
       case line
       when /^Needs Merge "(.+)" \[to \S+ from (\S+) base (\S+)\]/
         report(:MERGE, mkpath($1), $2)
@@ -381,9 +392,8 @@ class CheckinCommand < Command
     specified_targets.each do |path|
       puts "  " + path
     end
-    return if $test_mode
     comment_file = prompt_for_comment
-    cleartool("checkin -cfile #{comment_file} #{specified_targets}") do |line|
+    cleartool_unsafe("checkin -cfile #{comment_file} #{specified_targets}") do |line|
       case line
       when /^Loading /
         # ignore
@@ -403,7 +413,7 @@ end
 class CheckoutCommand < Command
   
   def execute
-    cleartool("checkout -unreserved -ncomment #{specified_targets}") do |line|
+    cleartool_unsafe("checkout -unreserved -ncomment #{specified_targets}") do |line|
       case line
       when /^Checked out "(.+)" from version "(\S+)"\./
         report(:CO, mkpath($1), $2)
@@ -422,14 +432,14 @@ class UncheckoutCommand < Command
     @action = '-keep'
   end
   
-  def option_rm
+  def option_remove
     @action = '-rm'
   end
   
-  alias :option_r :option_rm
+  alias :option_r :option_remove
 
   def execute
-    cleartool("uncheckout #{@action} #{specified_targets}") do |line|
+    cleartool_unsafe("uncheckout #{@action} #{specified_targets}") do |line|
       case line
       when /^Loading /
         # ignore
@@ -487,31 +497,6 @@ class DirectoryModificationCommand < Command
 
 end
   
-class AutoCheckinCommand < Command
-
-  def find_checkouts
-    ls = LsCommand.new
-    ls.option_a
-    ls.targets = effective_targets
-    collector = CollectingListener.new
-    ls.listener = collector
-    ls.execute
-    collector.elements.find_all { |e| e.status == :CO }.collect { |e| e.path }
-  end
-
-  def execute
-    checked_out_elements = find_checkouts
-    if checked_out_elements.empty?
-      puts "Nothing to check-in" 
-      return
-    end
-    ci = CheckinCommand.new
-    ci.targets = checked_out_elements
-    ci.execute
-  end
-  
-end
-
 class RemoveCommand < DirectoryModificationCommand
   
   def execute
@@ -586,11 +571,62 @@ class VersionTreeCommand < Command
   
 end
 
+class AutoCheckinCommand < Command
+
+  def find_checkouts
+    ls = LsCommand.new
+    ls.option_r
+    ls.targets = effective_targets
+    collector = CollectingListener.new
+    ls.listener = collector
+    ls.execute
+    collector.elements.find_all { |e| e.status == :CO }.collect { |e| e.path }
+  end
+
+  def execute
+    checked_out_elements = find_checkouts
+    if checked_out_elements.empty?
+      puts "Nothing to check-in" 
+      return
+    end
+    ci = CheckinCommand.new
+    ci.targets = checked_out_elements
+    ci.execute
+  end
+  
+end
+
+class AutoUncheckoutCommand < Command
+
+  def find_checkouts
+    ls = LsCommand.new
+    ls.option_r
+    ls.targets = effective_targets
+    collector = CollectingListener.new
+    ls.listener = collector
+    ls.execute
+    collector.elements.find_all { |e| e.status == :CO }.collect { |e| e.path }
+  end
+
+  def execute
+    checked_out_elements = find_checkouts
+    if checked_out_elements.empty?
+      puts "Nothing to check-in" 
+      return
+    end
+    unco = UncheckoutCommand.new
+    unco.targets = checked_out_elements
+    unco.execute
+  end
+  
+end
+
 #---( Command-line processing )---
 
 class CommandLine
 
   def make_command(name)
+    raise UsageException, "no command specified" if name.nil?
     case name
     when 'list', 'ls', 'status', 'stat'
       LsCommand.new
@@ -608,6 +644,8 @@ class CommandLine
       AddCommand.new
     when 'auto-checkin', 'auto-ci', 'auto-commit'
       AutoCheckinCommand.new
+    when 'auto-uncheckout', 'auto-unco', 'auto-revert'
+      AutoUncheckoutCommand.new
     when 'diff'
       DiffCommand.new
     when 'log', 'history'
@@ -615,32 +653,37 @@ class CommandLine
     when 'tree', 'vtree'
       VersionTreeCommand.new
     else
-      raise "Unknown command: " + name
+      raise UsageException, "Unknown command: " + name
     end
   end
 
-  def do(*args)
-
-    # Handle global options (before the command)
-    while /^-/ === args[0]
-      option = args.shift
+  def handle_global_options
+    while /^-/ === @args[0]
+      option = @args.shift
       case option
       when '-t'
         $test_mode = true
       when '--debug', '-d'
         $debug_mode = true
       else
-        raise "Unrecognised global argument: #{option}"
+        raise UsageException, "Unrecognised global argument: #{option}"
       end
     end
+  end
 
-    if args.empty?
+  def do(*args)
+    @args = args
+    begin
+      handle_global_options
+      @command = make_command(@args.shift)
+      @command.accept_args(@args)
+      @command.execute
+    rescue UsageException => usage
+      $stderr.puts "ERROR: " + usage.message
+      $stderr.puts
       $stderr.puts $USAGE
       exit(1)
     end
-
-    make_command(args.shift).accept_args(args).execute
-    
   end
 
 end
