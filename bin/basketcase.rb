@@ -8,44 +8,10 @@
 #
 # @author Mike Williams
 
+$BASKETCASE = "basketcase"
+
 $USAGE = <<EOF
-usage: basketcase <command> [<options>]
-
-COMMANDS:
-
-% {list,ls,status,stat}
-
-    List element status.
-
-    -a(ll)      Show all files. 
-                (by default, up-to-date files are not reported)
-
-    -r(ecurse)  Recursively list sub-directories.
-                (by default, just lists current directory)
-
-% update
-
-    Update your snapshot view. 
-
-    -nomerge    Don\'t attempt to merge in changes to checked-out files.
-
-% {checkout,co,edit}
-
-    Check-out an element (unreserved).
-
-% {checkin,ci,commit}
-
-    Check-in an element, prompting for a check-in message.
-
-% {uncheckout,unco,revert}
-
-    Undo a checkout, reverting to checked-in version.
-
-    -r(emove)   Don\'t retain the existing version in a '.keep' file.
-
-% {remove,rm,delete,del}
-
-    Mark an element as deleted.
+usage: #{$BASKETCASE} <command> [<options>]
 
 GLOBAL OPTIONS
 
@@ -53,11 +19,14 @@ GLOBAL OPTIONS
                 (by default, operates locally)
 
     -t          test/dry-run/simulate mode
-                don\'t actually do anything
+                (ie. don\'t actually do anything)
 
     --debug     debug cleartool interaction
 
+COMMANDS        (type '$BASKETCASE help <command>' for details)
+
 EOF
+# ... command details are added below ...
 
 #---( Imports )---
 
@@ -178,13 +147,37 @@ class TargetList
 
 end
 
-#---( Commands )---
+#---( Command registry )---
+
+$command_registry = {}
+
+def command(command_class, names)
+  names.each { |name| $command_registry[name] = command_class }
+  $USAGE << "    % #{names.join(', ')}\n"
+end
 
 class UsageException < Exception
 end
 
+def make_command(name)
+  raise UsageException, "no command specified" if name.nil?
+  command_class = $command_registry[name]
+  raise UsageException, "Unknown command: " + name unless command_class
+  command_class.new
+end
+
+#---( Commands )---
+
 # Base ClearCase command
 class Command
+
+  def synopsis
+    ""
+  end
+
+  def help
+    "Sorry, no help provided ..."
+  end
 
   attr_writer :listener
   attr_writer :targets
@@ -255,6 +248,11 @@ class Command
     cleartool(command, &block)
   end
     
+  def view_root
+    cleartool("pwv -root") do |line|
+      return mkpath(line.chomp)
+    end
+  end
 
   def cannot_deal_with(line)
     $stderr.puts "unrecognised output: " + line
@@ -276,7 +274,49 @@ class Command
 
 end
 
+class HelpCommand < Command
+
+  def synopsis
+    "[<command>]"
+  end
+
+  def help
+    "Display usage instructions."
+  end
+
+  def execute
+    if @targets.empty?
+      puts $USAGE
+      exit
+    end
+    @targets.each do |command_name|
+      command = make_command(command_name)
+      puts
+      puts "% #{$BASKETCASE} #{command_name} #{command.synopsis}"
+      puts
+      puts command.help.gsub(/^/, "    ")
+    end
+  end
+
+end
+
 class LsCommand < Command
+
+  def synopsis
+    "[<element> ...]"
+  end
+
+  def help
+    <<EOF
+List element status.
+
+-a(ll)      Show all files. 
+            (by default, up-to-date files are not reported)
+
+-r(ecurse)  Recursively list sub-directories.
+            (by default, just lists current directory)
+EOF
+    end
 
   def option_all
     @include_all = true
@@ -319,7 +359,54 @@ class LsCommand < Command
 
 end
 
+class LsCoCommand < Command
+
+  def synopsis
+    "[-r] [-d] [<element> ...]"
+  end
+
+  def help
+    "List checkouts by ALL users"
+  end
+
+  def option_directory
+    @directory_only = true
+  end
+
+  alias :option_d :option_directory
+
+  def execute
+    args = ''
+    args += ' -recurse' if @recursive
+    args += ' -directory' if @directory_only
+    cleartool("lsco #{args} #{effective_targets}") do |line|  
+      case line
+      when /^.*\s(\S+)\s+checkout.*version "(\S+)" from /
+        report($1, mkpath($2))
+      when /^Added /
+        # ignore
+      else
+        cannot_deal_with line
+      end
+    end
+  end
+
+end
+
 class UpdateCommand < Command
+
+  def synopsis
+    "[-nomerge] [<element> ...]"
+  end
+
+  def help
+    <<EOF
+Update your (snapshot) view. 
+
+-nomerge    Don\'t attempt to merge in changes to checked-out files.
+EOF
+
+  end
 
   def option_nomerge
     @nomerge = true
@@ -332,9 +419,7 @@ class UpdateCommand < Command
   end
 
   def execute_update 
-    cleartool("pwv -root") do |line|
-      @root = mkpath(line.chomp)
-    end
+    @root = view_root
     args = '-log nul -force'
     args += ' -print' if $test_mode
     cleartool("update #{args} #{effective_targets}") do |line|
@@ -387,6 +472,14 @@ end
 
 class CheckinCommand < Command
   
+  def synopsis
+    "<element> ..."
+  end
+
+  def help
+    "Check-in elements, prompting for a check-in message."
+  end
+
   def execute
     puts "Checking-in:"
     specified_targets.each do |path|
@@ -411,7 +504,15 @@ class CheckinCommand < Command
 end
 
 class CheckoutCommand < Command
-  
+
+  def synopsis
+    "<element> ..."
+  end
+
+  def help
+    "Check-out elements (unreserved)."
+  end
+
   def execute
     cleartool_unsafe("checkout -unreserved -ncomment #{specified_targets}") do |line|
       case line
@@ -427,6 +528,18 @@ end
 
 class UncheckoutCommand < Command
   
+  def synopsis
+    "[-r] <element> ..."
+  end
+
+  def help
+    <<EOF
+Undo a checkout, reverting to the checked-in version.
+
+-r(emove)   Don\'t retain the existing version in a '.keep' file.
+EOF
+  end
+
   def initialize
     super
     @action = '-keep'
@@ -499,6 +612,17 @@ end
   
 class RemoveCommand < DirectoryModificationCommand
   
+  def synopsis
+    "<element> ..."
+  end
+
+  def help
+    <<EOF
+Mark an element as deleted.
+(Parent directories are checked-out automatically)
+EOF
+  end
+
   def execute
     unlock_parent_directories(specified_targets)
     cleartool("rmname -ncomment #{specified_targets}") do |line|
@@ -517,6 +641,17 @@ end
 
 class AddCommand < DirectoryModificationCommand
   
+  def synopsis
+    "<element> ..."
+  end
+
+  def help
+    <<EOF
+Add elements to the repository.
+(Parent directories are checked-out automatically)
+EOF
+  end
+
   def execute
     unlock_parent_directories(specified_targets)
     cleartool("mkelem -ncomment #{specified_targets}") do |line|
@@ -534,7 +669,19 @@ class AddCommand < DirectoryModificationCommand
 end
 
 class DiffCommand < Command
-  
+
+  def synopsis
+    "[-g] <element>"
+  end
+
+  def help
+    <<EOF
+Compare a file to the latest checked-in version.
+
+-g          Graphical display.
+EOF
+  end
+
   def execute
     args = ''
     args += ' -graphical' if @graphical
@@ -549,6 +696,16 @@ end
 
 class LogCommand < Command
   
+  def synopsis
+    "[<element> ...]"
+  end
+
+  def help
+    <<EOF
+List the history of specified elements.
+EOF
+  end
+
   def execute
     args = ''
     args += ' -graphical' if @graphical
@@ -561,6 +718,18 @@ end
 
 class VersionTreeCommand < Command
   
+  def synopsis
+    "<element>"
+  end
+
+  def help
+    <<EOF
+Display a version-tree of specified elements.
+
+-g          Graphical display.
+EOF
+  end
+
   def execute
     args = ''
     args += ' -graphical' if @graphical
@@ -572,6 +741,16 @@ class VersionTreeCommand < Command
 end
 
 class AutoCheckinCommand < Command
+
+  def synopsis
+    "[<element> ...]"
+  end
+
+  def help
+    <<EOF
+Bulk commit: check-in all checked-out elements.
+EOF
+  end
 
   def find_checkouts
     ls = LsCommand.new
@@ -598,6 +777,16 @@ end
 
 class AutoUncheckoutCommand < Command
 
+  def synopsis
+    "[<element> ...]"
+  end
+
+  def help
+    <<EOF
+Bulk revert: revert all checked-out elements.
+EOF
+  end
+
   def find_checkouts
     ls = LsCommand.new
     ls.option_r
@@ -621,41 +810,28 @@ class AutoUncheckoutCommand < Command
   
 end
 
+#---( Register commands )---
+
+command LsCommand,              %w(list ls status stat)
+command LsCoCommand,            %w(lsco)
+command DiffCommand,            %w(diff)
+command LogCommand,             %w(log history)
+command VersionTreeCommand,     %w(tree vtree)
+
+command UpdateCommand,          %w(update up)
+command CheckinCommand,         %w(checkin ci commit)
+command CheckoutCommand,        %w(checkout co edit)
+command UncheckoutCommand,      %w(uncheckout unco revert)
+command AddCommand,             %w(add)
+command RemoveCommand,          %w(remove rm delete del)
+command AutoCheckinCommand,     %w(auto-checkin auto-ci auto-commit)
+command AutoUncheckoutCommand,  %w(auto-uncheckout auto-unco auto-revert)
+
+command HelpCommand,            %w(help)
+
 #---( Command-line processing )---
 
 class CommandLine
-
-  def make_command(name)
-    raise UsageException, "no command specified" if name.nil?
-    case name
-    when 'list', 'ls', 'status', 'stat'
-      LsCommand.new
-    when 'update', 'up'
-      UpdateCommand.new
-    when 'checkout', 'co', 'edit'
-      CheckoutCommand.new
-    when 'checkin', 'ci', 'commit'
-      CheckinCommand.new
-    when 'uncheckout', 'unco', 'revert'
-      UncheckoutCommand.new
-    when 'remove', 'rm', 'delete', 'del'
-      RemoveCommand.new
-    when 'add'
-      AddCommand.new
-    when 'auto-checkin', 'auto-ci', 'auto-commit'
-      AutoCheckinCommand.new
-    when 'auto-uncheckout', 'auto-unco', 'auto-revert'
-      AutoUncheckoutCommand.new
-    when 'diff'
-      DiffCommand.new
-    when 'log', 'history'
-      LogCommand.new
-    when 'tree', 'vtree'
-      VersionTreeCommand.new
-    else
-      raise UsageException, "Unknown command: " + name
-    end
-  end
 
   def handle_global_options
     while /^-/ === @args[0]
@@ -679,9 +855,9 @@ class CommandLine
       @command.accept_args(@args)
       @command.execute
     rescue UsageException => usage
-      $stderr.puts "ERROR: " + usage.message
+      $stderr.puts "ERROR: #{usage.message}"
       $stderr.puts
-      $stderr.puts $USAGE
+      $stderr.puts "try '#{$BASKETCASE} help' for usage info"
       exit(1)
     end
   end
