@@ -47,9 +47,11 @@ such as CVS or Subversion.
 
 <ul>
   <li><strong>List</strong> modified elements.</li>
-  <li><strong>Update</strong> a snapshot view, with <strong>automatic merge</strong> of changes to checked-out elements.</li>
+  <li><strong>Update</strong> a snapshot view, including <strong>automatic
+  merge</strong> of modified elements.</li>
   <li><strong>Check-out</strong> (unreserved) and <strong>check-in</strong> elements.</li>
   <li><strong>Undo a check-out</strong>, reverting to the base version.</li>
+  <li>Perform a <strong>bulk check-in</strong> (or revert).</li>
   <li><strong>Add</strong>, <strong>remove</strong> and <strong>rename</strong> elements.</li>
   <li>Display <strong>change-logs</strong> and <strong>version-trees</strong>.</li>
   <li>Display <strong>differences</strong> for modified elements.</li>
@@ -57,8 +59,8 @@ such as CVS or Subversion.
 
 <p>
 All of the above will seem rather banal to CVS/Subversion users; that's the
-point - BasketCase is intended to make ClearCase usage intuitive and
-straightforward, ie. boring.
+point: BasketCase is intended to make ClearCase usage less "interesting"
+(where interesting means irritating).
 </p>
 
 <h3>Getting BasketCase</h3>
@@ -88,7 +90,7 @@ way:
   the change to the repository immediately, without waiting for a
   "commit".</li>
   <li>When updating, ClearCase will not attempt to merge other developers'
-  changes to elements you have checked-out; this can leave your view in an
+  changes to elements you have checked-out ... leaving your view in an
   inconsistent state.</li>
   <li>Performing an automatic merge from the command-line requires an
   unwieldy, obscure command.</li>
