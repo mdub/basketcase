@@ -1,3 +1,3 @@
 task :publish do
-  sh "scp -r web/index.html mdub@rubyforge.org:/var/www/gforge-projects/basketcase/"
+  sh "scp -r dist/basketcase.rb dist/index.html mdub@rubyforge.org:/var/www/gforge-projects/basketcase/"
 end
