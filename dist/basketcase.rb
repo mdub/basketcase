@@ -15,13 +15,10 @@ usage: #{$BASKETCASE} <command> [<options>]
 
 GLOBAL OPTIONS
 
-    -r          recurse into sub-directories
-                (by default, operates locally)
-
-    -t          test/dry-run/simulate mode
+    -t/--test	test/dry-run/simulate mode
                 (ie. don\'t actually do anything)
 
-    --debug     debug cleartool interaction
+    -d/--debug  debug cleartool interaction
 
 COMMANDS        (type '$BASKETCASE help <command>' for details)
 
@@ -86,6 +83,12 @@ def log_debug(msg)
   $stderr.puts(msg) if $debug_mode
 end
 
+class Symbol
+  def to_proc
+    proc { |obj, *args| obj.send(self, *args) }
+  end
+end
+
 #---( Output formatting )---
 
 # Represents the status of an element
@@ -139,6 +142,10 @@ class TargetList
 
   def empty?
     @target_paths.empty?
+  end
+
+  def size
+    @target_paths.size
   end
 
   def parents
@@ -381,9 +388,11 @@ class LsCoCommand < Command
     args += ' -directory' if @directory_only
     cleartool("lsco #{args} #{effective_targets}") do |line|  
       case line
-      when /^.*\s(\S+)\s+checkout.*version "(\S+)" from /
-        report($1, mkpath($2))
+      when /^.*\s(\S+)\s+checkout.*version "(\S+)" from (\S+)/
+        report($1, mkpath($2), $3)
       when /^Added /
+        # ignore
+      when /^  /
         # ignore
       else
         cannot_deal_with line
@@ -594,7 +603,7 @@ class DirectoryModificationCommand < Command
     collector = CollectingListener.new
     ls.listener = collector
     ls.execute
-    collector.elements.find_all { |e| e.status == :OK }.collect { |e| e.path }
+    collector.elements.find_all { |e| e.status == :OK }.collect(&:path)
   end
 
   def checkout(target_list)
@@ -625,12 +634,12 @@ EOF
 
   def execute
     unlock_parent_directories(specified_targets)
-    cleartool("rmname -ncomment #{specified_targets}") do |line|
+    cleartool_unsafe("rmname -ncomment #{specified_targets}") do |line|
       case line
       when /^Unloaded /
         # ignore
       when /^Removed "(.+)"\./
-        report(:RM, mkpath($1))
+        report(:REMOVED, mkpath($1))
       else
         cannot_deal_with line
       end
@@ -654,12 +663,41 @@ EOF
 
   def execute
     unlock_parent_directories(specified_targets)
-    cleartool("mkelem -ncomment #{specified_targets}") do |line|
+    cleartool_unsafe("mkelem -ncomment #{specified_targets}") do |line|
       case line
       when /^Created element /
         # ignore
       when /^Checked out "(.+)" from version "(\S+)"\./
         report(:ADDED, mkpath($1), $2)
+      else
+        cannot_deal_with line
+      end
+    end
+  end
+
+end
+
+class MoveCommand < DirectoryModificationCommand
+  
+  def synopsis
+    "<from> <to>"
+  end
+
+  def help
+    <<EOF
+Move/rename an element.
+(Parent directories are checked-out automatically)
+EOF
+  end
+
+  def execute
+    raise UsageException, "expected two arguments" unless (specified_targets.size == 2)
+    unlock_parent_directories(specified_targets)
+    cleartool_unsafe("move -ncomment #{specified_targets}") do |line|
+      case line
+      when /^Moved "(.+)" to "(.+)"\./
+        report(:REMOVED, mkpath($1))
+        report(:ADDED, mkpath($2))
       else
         cannot_deal_with line
       end
@@ -740,7 +778,25 @@ EOF
   
 end
 
-class AutoCheckinCommand < Command
+class AutoCommand < Command
+
+  def list_elements
+    ls = LsCommand.new
+    ls.option_r
+    ls.targets = effective_targets
+    collector = CollectingListener.new
+    ls.listener = collector
+    ls.execute
+    collector.elements
+  end
+
+  def find_checkouts
+    list_elements.find_all { |e| e.status == :CO }.collect(&:path)
+  end
+
+end
+
+class AutoCheckinCommand < AutoCommand
 
   def synopsis
     "[<element> ...]"
@@ -750,16 +806,6 @@ class AutoCheckinCommand < Command
     <<EOF
 Bulk commit: check-in all checked-out elements.
 EOF
-  end
-
-  def find_checkouts
-    ls = LsCommand.new
-    ls.option_r
-    ls.targets = effective_targets
-    collector = CollectingListener.new
-    ls.listener = collector
-    ls.execute
-    collector.elements.find_all { |e| e.status == :CO }.collect { |e| e.path }
   end
 
   def execute
@@ -775,7 +821,7 @@ EOF
   
 end
 
-class AutoUncheckoutCommand < Command
+class AutoUncheckoutCommand < AutoCommand
 
   def synopsis
     "[<element> ...]"
@@ -787,20 +833,10 @@ Bulk revert: revert all checked-out elements.
 EOF
   end
 
-  def find_checkouts
-    ls = LsCommand.new
-    ls.option_r
-    ls.targets = effective_targets
-    collector = CollectingListener.new
-    ls.listener = collector
-    ls.execute
-    collector.elements.find_all { |e| e.status == :CO }.collect { |e| e.path }
-  end
-
   def execute
     checked_out_elements = find_checkouts
     if checked_out_elements.empty?
-      puts "Nothing to check-in" 
+      puts "Nothing to revert" 
       return
     end
     unco = UncheckoutCommand.new
@@ -808,6 +844,80 @@ EOF
     unco.execute
   end
   
+end
+
+class AutoSyncCommand < AutoCommand
+  
+  def initialize
+    @control_file = Pathname.new("basketcase-autosync.tmp")
+  end
+
+  def synopsis
+    "[<element> ...]"
+  end
+
+  def help
+    <<EOF
+Bulk add/remove: offer to add new elements, and remove missing ones.
+EOF
+  end
+
+  def generate_control_file
+    element_list = list_elements
+    local_elements = element_list.find_all { |e| e.status == :LOCAL }.collect(&:path)
+    missing_elements = element_list.find_all { |e| e.status == :MISSING }.collect(&:path)
+    @control_file.open('w') do |control|
+      local_elements.each do |path|
+        control.puts "ADD\t#{path}"
+      end
+      missing_elements.each do |path|
+        control.puts "RM\t#{path}"
+      end
+    end
+  end
+
+  def edit_control_file
+    editor = ENV["EDITOR"] || "notepad"
+    system("#{editor} #{@control_file}")
+  end
+
+  def process_control_file
+    elements_to_add = []
+    elements_to_remove = []
+    @control_file.open do |control|
+      control.each_line do |line|
+        case line
+        when /^ADD\s+(.*)/
+          elements_to_add << $1
+        when /^RM\s+(.*)/
+          elements_to_remove << $1
+        end
+      end
+    end
+    add_elements(elements_to_add)
+    remove_elements(elements_to_remove)
+  end
+
+  def add_elements(targets)
+    return if targets.empty?
+    add = AddCommand.new
+    add.targets = targets
+    add.execute
+  end
+
+  def remove_elements(targets)
+    return if targets.empty?
+    remove = RemoveCommand.new
+    remove.targets = targets
+    remove.execute
+  end
+
+  def execute
+    generate_control_file
+    edit_control_file
+    process_control_file
+  end
+
 end
 
 #---( Register commands )---
@@ -824,8 +934,10 @@ command CheckoutCommand,        %w(checkout co edit)
 command UncheckoutCommand,      %w(uncheckout unco revert)
 command AddCommand,             %w(add)
 command RemoveCommand,          %w(remove rm delete del)
+command MoveCommand,            %w(move mv rename)
 command AutoCheckinCommand,     %w(auto-checkin auto-ci auto-commit)
 command AutoUncheckoutCommand,  %w(auto-uncheckout auto-unco auto-revert)
+command AutoSyncCommand,        %w(auto-sync auto-addrm)
 
 command HelpCommand,            %w(help)
 
@@ -837,7 +949,7 @@ class CommandLine
     while /^-/ === @args[0]
       option = @args.shift
       case option
-      when '-t'
+      when '--test', '-t'
         $test_mode = true
       when '--debug', '-d'
         $debug_mode = true
@@ -867,8 +979,4 @@ end
 CommandLine.new.do(*ARGV)
 
 # TODO:
-# - mv/rename
-# - addlocal
-# - rmmissing
-# - automatic uncheckout of removed elements
 # - automatic uncheckout of files that can't be merged (for Durran)
