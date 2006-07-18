@@ -35,6 +35,9 @@ $cwd = Pathname.new('.').expand_path
 $test_mode = false
 $debug_mode = false
 
+$stdout.sync = true
+$stderr.sync = true
+
 #---( Ignorance is bliss )---
 
 $ignore_patterns = []
@@ -80,7 +83,8 @@ def mkpath(path)
 end
 
 def log_debug(msg)
-  $stderr.puts(msg) if $debug_mode
+  return unless $debug_mode
+  $stderr.puts(msg) 
 end
 
 class Symbol
@@ -115,7 +119,7 @@ class DefaultListener
 
   def report(element)
     printf("%-7s %-15s %s\n", element.status, 
-           element.base_version, element.path)
+                   element.base_version, element.path)
   end
   
 end
@@ -269,7 +273,6 @@ class Command
     comment_file_path = Pathname.new("basketcase-comment.tmp")
     comment_file_path.open('w') do |comment_file|
       puts "Enter message (terminated by '.'):"
-      $stdout.flush
       message = ""
       $stdin.each_line do |line|
         break if line.chomp == '.'
