@@ -344,7 +344,7 @@ EOF
     args = ''
     args += ' -recurse' if @recursive
     args += ' -directory' if @directory_only
-    cleartool("ls #{args} #{effective_targets}") do |line|  
+    cleartool("ls #{args} #{effective_targets}") do |line|
       case line
       when /^(\S+)@@(\S+) \[hijacked/
         report(:HIJACK, mkpath($1), $2)
@@ -359,7 +359,10 @@ EOF
         report(status, element_path, $2)
       when /^(\S+)/ 
         path = mkpath($1)
-        next if ignored?(path)
+        if ignored?(path)
+          log_debug "ignoring #{path}"
+          next
+        end
         report(:LOCAL, path)
       else
         cannot_deal_with line
@@ -448,6 +451,8 @@ EOF
         report(:REMOVED, relative_path($1))
       when /^Keeping hijacked object "(.*)" - base "(.*)"/
         report(:HIJACK, relative_path($1), $2)
+      when /^Keeping "(.*)"/
+        # ignore
       when /^End dir/
         # ignore
       when /^Done loading/
@@ -727,7 +732,7 @@ EOF
     args = ''
     args += ' -graphical' if @graphical
     @targets.each do |target|
-      cleartool("diff #{args} #{target}@@\\main\\LATEST #{target}") do |line|
+      cleartool("diff #{args} -predecessor #{target}") do |line|
         puts line
       end
     end
@@ -747,8 +752,16 @@ List the history of specified elements.
 EOF
   end
 
+  def option_directory
+    @directory_only = true
+  end
+
+  alias :option_d :option_directory
+
   def execute
     args = ''
+    args += ' -recurse' if @recursive
+    args += ' -directory' if @directory_only
     args += ' -graphical' if @graphical
     cleartool("lshistory #{args} #{effective_targets}") do |line|
       puts line
