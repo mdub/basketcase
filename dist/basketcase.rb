@@ -31,55 +31,21 @@ require 'pathname'
 
 #---( Globals )---
 
-$cwd = Pathname.new('.').expand_path
+$cwd = Pathname('.').expand_path
 $test_mode = false
 $debug_mode = false
 
 $stdout.sync = true
 $stderr.sync = true
 
-#---( Ignorance is bliss )---
-
-$ignore_patterns = []
-
-def ignore(regexp)
-  $ignore_patterns << regexp
-end
-
-def ignored?(path)
-  $ignore_patterns.each { |rexexp| return true if rexexp === path }
-  return false
-end
-
-ignore %r{(^|/).temp}
-ignore %r{(^|/)bin}
-ignore %r{(^|/)classes}
-ignore %r{/orbtrc}
-ignore %r{\.LST$}
-ignore %r{\.ant-targets-}
-ignore %r{\.class$}
-ignore %r{\.contrib$}
-ignore %r{\.contrib\.\d+$}
-ignore %r{\.keep$}
-ignore %r{\.keep\.\d+$}
-ignore %r{\.iws$}
-ignore %r{\.jar$}
-ignore %r{\.jasper$}
-ignore %r{\.keep$}
-ignore %r{\.log$}
-ignore %r{\.lst$}
-ignore %r{\.merge$}
-ignore %r{\.temp$}
-ignore %r{\.tmp$}
-ignore %r{\.unloaded$}
-ignore %r{junit\d+\.properties$}
-ignore %r{null}
-ignore %r{~$}
-
 #---( Utilities )---
 
 def mkpath(path)
-  Pathname.new(path.to_str.tr('\\', '/').sub(%r{^./},''))
+  path = path.to_str
+  path = path.tr('\\', '/')
+  path = path.sub(%r{^\./},'')
+  path = path.sub(%r{^([A-Za-z]):\/}, '/cygdrive/\1/')
+  Pathname.new(path)
 end
 
 def log_debug(msg)
@@ -90,6 +56,57 @@ end
 class Symbol
   def to_proc
     proc { |obj, *args| obj.send(self, *args) }
+  end
+end
+
+#---( Ignorance is bliss )---
+
+$ignore_patterns = []
+class << $ignore_patterns
+  def add(path_pattern)
+    path = File.expand_path(path_pattern)
+    log_debug "ignore #{path}"
+    self << path
+  end
+end
+
+def ignore(pattern)
+  pattern = pattern.to_str
+  if pattern[-1,1] == '/'                      # a directory
+    $ignore_patterns.add pattern.chop          # ignore the directory itself
+    $ignore_patterns.add pattern + '**/*'      # and any files within it
+  else
+    $ignore_patterns.add pattern
+  end
+end
+
+def ignored?(path)
+  path = File.expand_path(path)
+  $ignore_patterns.detect do |pattern| 
+    File.fnmatch(pattern, path, File::FNM_PATHNAME | File::FNM_DOTMATCH)
+  end
+end
+
+def define_standard_ignore_patterns
+  # Standard ignore patterns
+  ignore "**/*.hijacked"
+  ignore "**/*.keep"
+  ignore "**/*.keep.[0-9]"
+  ignore "**/#*#"
+  ignore "**/*~"
+end
+
+def load_project_ignore_patterns
+  dir = $cwd
+  until dir.root?
+    bcignore_file = dir + ".bcignore"
+    if bcignore_file.exist?
+      bcignore_file.each_line do |line|
+        next if line =~ %r{^#}
+        ignore(dir + line.strip)
+      end
+    end
+    dir = dir.parent
   end
 end
 
@@ -141,7 +158,7 @@ class TargetList
   end
   
   def to_s
-    @target_paths.join(" ")
+    @target_paths.map { |f| "'#{f}'" }.join(" ")
   end
 
   def empty?
@@ -246,6 +263,7 @@ class Command
   def cleartool(command)
     log_debug "RUNNING: cleartool #{command}"
     IO.popen("cleartool " + command).each_line do |line|
+      line.sub!("\r", '')
       log_debug "<<< " + line
       yield(line) if block_given?
     end
@@ -260,9 +278,13 @@ class Command
   end
     
   def view_root
-    cleartool("pwv -root") do |line|
-      return mkpath(line.chomp)
+    @root ||= catch(:root) do
+      cleartool("pwv -root") do |line|
+        throw :root, mkpath(line.chomp)
+      end
     end
+    log_debug "view_root = #{@root}"
+    @root
   end
 
   def cannot_deal_with(line)
@@ -346,18 +368,18 @@ EOF
     args += ' -directory' if @directory_only
     cleartool("ls #{args} #{effective_targets}") do |line|
       case line
-      when /^(\S+)@@(\S+) \[hijacked/
+      when /^(.+)@@(\S+) \[hijacked/
         report(:HIJACK, mkpath($1), $2)
-      when /^(\S+)@@(\S+) \[loaded but missing\]/
+      when /^(.+)@@(\S+) \[loaded but missing\]/
         report(:MISSING, mkpath($1), $2)
-      when /^(\S+)@@(\S+) +Rule: /
+      when /^(.+)@@(\S+) +Rule: /
         next unless @include_all
         report(:OK, mkpath($1), $2)
-      when /^(\S+)@@\S+ from (\S+)/
+      when /^(.+)@@\S+ from (\S+)/
         element_path = mkpath($1)
         status = element_path.exist? ? :CO : :MISSING
         report(status, element_path, $2)
-      when /^(\S+)/ 
+      when /^(.+)/ 
         path = mkpath($1)
         if ignored?(path)
           log_debug "ignoring #{path}"
@@ -428,13 +450,11 @@ EOF
   end
 
   def relative_path(s)
-    raise '@root not defined' unless(@root)
-    full_path = @root + mkpath(s)
+    full_path = view_root + mkpath(s)
     full_path.relative_path_from($cwd)
   end
 
   def execute_update 
-    @root = view_root
     args = '-log nul -force'
     args += ' -print' if $test_mode
     cleartool("update #{args} #{effective_targets}") do |line|
@@ -527,16 +547,34 @@ class CheckoutCommand < Command
   end
 
   def help
-    "Check-out elements (unreserved)."
+    ""
   end
 
+  def help
+    <<EOF
+Check-out elements (unreserved).  
+By default, any hijacked version is discarded.
+
+-h(ijack)   Retain the hijacked version.
+EOF
+  end
+
+  def initialize
+    super
+    @keep_or_revert = '-nquery'
+  end
+  
+  def option_hijack
+    @keep_or_revert = '-usehijack'
+  end
+  
+  alias :option_h :option_hijack
+
   def execute
-    cleartool_unsafe("checkout -unreserved -ncomment #{specified_targets}") do |line|
+    cleartool_unsafe("checkout -unreserved -ncomment #{@keep_or_revert} #{specified_targets}") do |line|
       case line
       when /^Checked out "(.+)" from version "(\S+)"\./
         report(:CO, mkpath($1), $2)
-      when /^Element "(.+)" is already checked out/
-        report(:CO, mkpath($1), 'already')
       end
     end
   end
@@ -979,6 +1017,8 @@ class CommandLine
     @args = args
     begin
       handle_global_options
+      define_standard_ignore_patterns
+      load_project_ignore_patterns
       @command = make_command(@args.shift)
       @command.accept_args(@args)
       @command.execute
@@ -995,4 +1035,5 @@ end
 CommandLine.new.do(*ARGV)
 
 # TODO:
+# - recursive checkout?
 # - automatic uncheckout of files that can't be merged (for Durran)
