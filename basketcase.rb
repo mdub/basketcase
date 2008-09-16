@@ -301,20 +301,21 @@ class Command
     $stderr.puts "unrecognised output: " + line
   end
 
+  def edit(file)
+    editor = ENV["EDITOR"] || "notepad"
+    system("#{editor} #{file}")
+  end
+
   def prompt_for_comment
-    comment_file_path = Pathname.new("basketcase-comment.tmp")
-    comment_file_path.open('w') do |comment_file|
-      if @comment
-        comment_file.puts @comment
-      else
-        puts "Enter message (terminated by '.'):"
-        $stdin.each_line do |line|
-          break if line.chomp == '.'
-          comment_file << line
-        end
+    comment_file = Pathname.new("basketcase-comment.tmp")
+    if @comment
+      comment_file.open('w') do |out|
+        out.puts @comment
       end
+    else
+      edit(comment_file)
     end
-    return comment_file_path
+    comment_file
   end
 
 end
@@ -950,8 +951,7 @@ EOF
   end
 
   def edit_control_file
-    editor = ENV["EDITOR"] || "notepad"
-    system("#{editor} #{@control_file}")
+    edit(@control_file)
   end
 
   def process_control_file
