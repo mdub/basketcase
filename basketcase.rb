@@ -50,7 +50,7 @@ end
 
 def log_debug(msg)
   return unless $debug_mode
-  $stderr.puts(msg) 
+  $stderr.puts(msg)
 end
 
 class Symbol
@@ -82,7 +82,7 @@ end
 
 def ignored?(path)
   path = File.expand_path(path)
-  $ignore_patterns.detect do |pattern| 
+  $ignore_patterns.detect do |pattern|
     File.fnmatch(pattern, path, File::FNM_PATHNAME | File::FNM_DOTMATCH)
   end
 end
@@ -136,10 +136,10 @@ end
 class DefaultListener
 
   def report(element)
-    printf("%-7s %-15s %s\n", element.status, 
+    printf("%-7s %-15s %s\n", element.status,
                    element.base_version, element.path)
   end
-  
+
 end
 
 #---( Target list )---
@@ -151,13 +151,13 @@ class TargetList
   def initialize(targets)
     @target_paths = targets.map { |t| mkpath(t) }
   end
-  
+
   def each
     @target_paths.each do |t|
       yield(t)
     end
   end
-  
+
   def to_s
     @target_paths.map { |f| "'#{f}'" }.join(" ")
   end
@@ -248,10 +248,11 @@ class Command
   def accept_args(args)
     while /^-+(.+)/ === args[0]
       option = args.shift
-      option_method = self.method("option_#{$1}")
-      unless option_method
+      option_method_name = "option_#{$1}"
+      unless respond_to?(option_method_name)
         raise UsageException, "Unrecognised option: #{option}"
       end
+      option_method = method(option_method_name)
       option_method.call(*args.shift(option_method.arity))
     end
     @targets = args
@@ -263,10 +264,10 @@ class Command
   end
 
   def specified_targets
-    raise UsageException, "No target specified" if @targets.empty? 
+    raise UsageException, "No target specified" if @targets.empty?
     TargetList.new(@targets)
   end
-  
+
   private
 
   def cleartool(command)
@@ -277,7 +278,7 @@ class Command
       yield(line) if block_given?
     end
   end
-    
+
   def cleartool_unsafe(command, &block)
     if $test_mode
       log_debug "WOULD RUN: cleartool #{command}"
@@ -285,7 +286,7 @@ class Command
     end
     cleartool(command, &block)
   end
-    
+
   def view_root
     @root ||= catch(:root) do
       cleartool("pwv -root") do |line|
@@ -354,7 +355,7 @@ class LsCommand < Command
     <<EOF
 List element status.
 
--a(ll)      Show all files. 
+-a(ll)      Show all files.
             (by default, up-to-date files are not reported)
 
 -r(ecurse)  Recursively list sub-directories.
@@ -384,14 +385,14 @@ EOF
         report(:HIJACK, mkpath($1), $2)
       when /^(.+)@@(\S+) \[loaded but missing\]/
         report(:MISSING, mkpath($1), $2)
+      when /^(.+)@@\S+\\CHECKEDOUT(?: from (\S+))?/
+        element_path = mkpath($1)
+        status = element_path.exist? ? :CO : :MISSING
+        report(status, element_path, $2 || 'new')
       when /^(.+)@@(\S+) +Rule: /
         next unless @include_all
         report(:OK, mkpath($1), $2)
-      when /^(.+)@@\S+ from (\S+)/
-        element_path = mkpath($1)
-        status = element_path.exist? ? :CO : :MISSING
-        report(status, element_path, $2)
-      when /^(.+)/ 
+      when /^(.+)/
         path = mkpath($1)
         if ignored?(path)
           log_debug "ignoring #{path}"
@@ -426,7 +427,7 @@ class LsCoCommand < Command
     args = ''
     args += ' -recurse' if @recursive
     args += ' -directory' if @directory_only
-    cleartool("lsco #{args} #{effective_targets}") do |line|  
+    cleartool("lsco #{args} #{effective_targets}") do |line|
       case line
       when /^.*\s(\S+)\s+checkout.*version "(\S+)" from (\S+)/
         report($1, mkpath($2), $3)
@@ -450,7 +451,7 @@ class UpdateCommand < Command
 
   def help
     <<EOF
-Update your (snapshot) view. 
+Update your (snapshot) view.
 
 -nomerge    Don\'t attempt to merge in changes to checked-out files.
 EOF
@@ -466,7 +467,7 @@ EOF
     full_path.relative_path_from($cwd)
   end
 
-  def execute_update 
+  def execute_update
     args = '-log nul -force'
     args += ' -print' if $test_mode
     cleartool("update #{args} #{effective_targets}") do |line|
@@ -497,8 +498,8 @@ EOF
 
   def execute_merge
     args = '-log nul -flatest '
-    if $test_mode 
-      args += "-print" 
+    if $test_mode
+      args += "-print"
     elsif @graphical
       args += "-gmerge"
     else
@@ -511,7 +512,7 @@ EOF
       end
     end
   end
-  
+
   def execute
     execute_update
     execute_merge unless @nomerge
@@ -520,7 +521,7 @@ EOF
 end
 
 class CheckinCommand < Command
-  
+
   def synopsis
     "<element> ..."
   end
@@ -564,7 +565,7 @@ class CheckoutCommand < Command
 
   def help
     <<EOF
-Check-out elements (unreserved).  
+Check-out elements (unreserved).
 By default, any hijacked version is discarded.
 
 -h(ijack)   Retain the hijacked version.
@@ -575,11 +576,11 @@ EOF
     super
     @keep_or_revert = '-nquery'
   end
-  
+
   def option_hijack
     @keep_or_revert = '-usehijack'
   end
-  
+
   alias :option_h :option_hijack
 
   def execute
@@ -594,7 +595,7 @@ EOF
 end
 
 class UncheckoutCommand < Command
-  
+
   def synopsis
     "[-r] <element> ..."
   end
@@ -611,11 +612,11 @@ EOF
     super
     @action = '-keep'
   end
-  
+
   def option_remove
     @action = '-rm'
   end
-  
+
   alias :option_r :option_remove
 
   attr_accessor :action
@@ -650,7 +651,7 @@ class CollectingListener
   def report(element)
     @elements << element
   end
-  
+
 end
 
 class DirectoryModificationCommand < Command
@@ -678,9 +679,9 @@ class DirectoryModificationCommand < Command
   end
 
 end
-  
+
 class RemoveCommand < DirectoryModificationCommand
-  
+
   def synopsis
     "<element> ..."
   end
@@ -709,7 +710,7 @@ EOF
 end
 
 class AddCommand < DirectoryModificationCommand
-  
+
   def synopsis
     "<element> ..."
   end
@@ -738,7 +739,7 @@ EOF
 end
 
 class MoveCommand < DirectoryModificationCommand
-  
+
   def synopsis
     "<from> <to>"
   end
@@ -783,7 +784,7 @@ EOF
   def execute
     args = ''
     args += ' -graphical' if @graphical
-    @targets.each do |target|
+    specified_targets.each do |target|
       cleartool("diff #{args} -predecessor #{target}") do |line|
         puts line
       end
@@ -793,7 +794,7 @@ EOF
 end
 
 class LogCommand < Command
-  
+
   def synopsis
     "[<element> ...]"
   end
@@ -819,11 +820,11 @@ EOF
       puts line
     end
   end
-  
+
 end
 
 class VersionTreeCommand < Command
-  
+
   def synopsis
     "<element>"
   end
@@ -843,7 +844,7 @@ EOF
       puts line
     end
   end
-  
+
 end
 
 class AutoCommand < Command
@@ -879,7 +880,7 @@ EOF
   def execute
     checked_out_elements = find_checkouts
     if checked_out_elements.empty?
-      puts "Nothing to check-in" 
+      puts "Nothing to check-in"
       return
     end
     ci = CheckinCommand.new
@@ -887,7 +888,7 @@ EOF
     ci.targets = checked_out_elements
     ci.execute
   end
-  
+
 end
 
 class AutoUncheckoutCommand < AutoCommand
@@ -905,7 +906,7 @@ EOF
   def execute
     checked_out_elements = find_checkouts
     if checked_out_elements.empty?
-      puts "Nothing to revert" 
+      puts "Nothing to revert"
       return
     end
     unco = UncheckoutCommand.new
@@ -913,11 +914,11 @@ EOF
     unco.targets = checked_out_elements
     unco.execute
   end
-  
+
 end
 
 class AutoSyncCommand < AutoCommand
-  
+
   def initialize
     @control_file = Pathname.new("basketcase-autosync.tmp")
   end
@@ -980,7 +981,7 @@ EOF
     command.execute
   end
 
-  
+
   def checkout_hijacked_command
     cmd = CheckoutCommand.new
     cmd.option_hijack
