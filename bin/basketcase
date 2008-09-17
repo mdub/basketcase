@@ -31,7 +31,6 @@ require 'pathname'
 
 #---( Globals )---
 
-$cwd = Pathname('.').expand_path
 $test_mode = false
 $debug_mode = false
 
@@ -81,7 +80,8 @@ def ignore(pattern)
 end
 
 def ignored?(path)
-  path = File.expand_path(path)
+  path = Pathname(path).expand_path
+  require_ignore_patterns_for(path.parent)
   $ignore_patterns.detect do |pattern|
     File.fnmatch(pattern, path, File::FNM_PATHNAME | File::FNM_DOTMATCH)
   end
@@ -97,18 +97,23 @@ def define_standard_ignore_patterns
   ignore "**/basketcase-*.tmp"
 end
 
-def load_project_ignore_patterns
-  dir = $cwd
-  until dir.root?
-    bcignore_file = dir + ".bcignore"
-    if bcignore_file.exist?
-      bcignore_file.each_line do |line|
-        next if line =~ %r{^#}
-        ignore(dir + line.strip)
-      end
+$ignore_patterns_loaded = {}
+def require_ignore_patterns_for(dir)
+  dir = Pathname(dir).expand_path
+  return(nil) if $ignore_patterns_loaded[dir]
+  require_ignore_patterns_for(dir.parent) unless dir.root?
+  bcignore_file = dir + ".bcignore"
+  if bcignore_file.exist?
+    bcignore_file.each_line do |line|
+      next if line =~ %r{^#}
+      ignore(dir + line.strip)
     end
-    dir = dir.parent
   end
+  $ignore_patterns_loaded[dir] = true
+end
+
+def load_project_ignore_patterns
+  require_ignore_patterns_for(Pathname.pwd)
 end
 
 #---( Output formatting )---
@@ -465,7 +470,7 @@ EOF
 
   def relative_path(s)
     full_path = view_root + mkpath(s)
-    full_path.relative_path_from($cwd)
+    full_path.relative_path_from(Pathname.pwd)
   end
 
   def execute_update
