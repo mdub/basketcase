@@ -940,11 +940,11 @@ EOF
       element_list.each do |e|
         case e.status
         when :LOCAL
-          control.puts "#ADD\t#{e.path}"
+          control.puts "ADD\t#{e.path}"
         when :MISSING
-          control.puts "#RM\t#{e.path}"
+          control.puts "RM\t#{e.path}"
         when :HIJACK
-          control.puts "#UPDATE\t#{e.path}"
+          control.puts "UPDATE\t#{e.path}"
         end
       end
     end

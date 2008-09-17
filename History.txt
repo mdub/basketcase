@@ -1,0 +1,6 @@
+=== 1.0.0 / 2008-09-16
+
+* Converted into a gem, using sow.
+
+  * Birthday!
+
