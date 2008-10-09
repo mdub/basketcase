@@ -311,18 +311,6 @@ class Command
     system("#{editor} #{file}")
   end
 
-  def prompt_for_comment
-    comment_file = Pathname.new("basketcase-comment.tmp")
-    if @comment
-      comment_file.open('w') do |out|
-        out.puts @comment
-      end
-    else
-      edit(comment_file)
-    end
-    comment_file
-  end
-
 end
 
 class HelpCommand < Command
@@ -537,11 +525,11 @@ class CheckinCommand < Command
   end
 
   def execute
-    puts "Checking-in:"
-    specified_targets.each do |path|
-      puts "  " + path
+    prompt_for_comment
+    comment_file = Pathname.new("basketcase-checkin-comment.tmp")
+    comment_file.open("w") do |out|
+      out.puts(@comment)
     end
-    comment_file = prompt_for_comment
     cleartool_unsafe("checkin -cfile #{comment_file} #{specified_targets}") do |line|
       case line
       when /^Loading /
@@ -555,6 +543,25 @@ class CheckinCommand < Command
       end
     end
     comment_file.unlink
+  end
+
+  def prompt_for_comment
+    return if @comment
+    comment_file = Pathname.new("basketcase-comment.tmp")
+    begin
+      comment_file.open('w') do |out|
+        out.puts "# Checking in:"
+        specified_targets.each do |target|
+          out.puts "#\t#{target}"
+        end
+      end
+      edit(comment_file)
+      @comment = comment_file.read.gsub(/^#.*\n/, '')
+    ensure
+      comment_file.unlink
+    end
+    raise UsageException, "No check-in comment provided" if @comment.empty?
+    @comment
   end
 
 end
@@ -926,6 +933,7 @@ end
 class AutoSyncCommand < AutoCommand
 
   def initialize
+    super
     @control_file = Pathname.new("basketcase-autosync.tmp")
     @actions = []
   end
