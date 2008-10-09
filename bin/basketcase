@@ -927,6 +927,7 @@ class AutoSyncCommand < AutoCommand
 
   def initialize
     @control_file = Pathname.new("basketcase-autosync.tmp")
+    @actions = []
   end
 
   def synopsis
@@ -936,45 +937,56 @@ class AutoSyncCommand < AutoCommand
   def help
     <<EOF
 Bulk add/remove: offer to add new elements, and remove missing ones.
+
+-n          Don\'t prompt to confirm actions.
 EOF
   end
 
-  def generate_control_file
-    element_list = list_elements
+  def option_noprompt
+    @noprompt = true
+  end
+
+  alias :option_n :option_noprompt
+
+  def collect_actions
+    list_elements.each do |e|
+      case e.status
+      when :LOCAL
+        @actions << ['add', e.path]
+      when :MISSING
+        @actions << ['rm', e.path]
+      when :HIJACK
+        @actions << ['co -h', e.path]
+      end
+    end
+  end
+
+  def prompt_for_confirmation
     @control_file.open('w') do |control|
-      element_list.each do |e|
-        case e.status
-        when :LOCAL
-          control.puts "ADD\t#{e.path}"
-        when :MISSING
-          control.puts "RM\t#{e.path}"
-        when :HIJACK
-          control.puts "UPDATE\t#{e.path}"
-        end
+      control.puts <<EOF
+# #{$BASKETCASE} proposes the actions listed below.
+# Delete any that you don't wish to occur, then save this file.
+#
+EOF
+      @actions.each do |a|
+        control.puts a.join("\t")
       end
     end
-  end
-
-  def edit_control_file
     edit(@control_file)
-  end
-
-  def process_control_file
-    elements_to_add = []
-    elements_to_remove = []
-    elements_to_replace = []
-    @control_file.open do |control|
+    @actions = []
+    @control_file.open('r') do |control|
       control.each_line do |line|
-        case line
-        when /^ADD\s+(.*)/
-          elements_to_add << $1
-        when /^RM\s+(.*)/
-          elements_to_remove << $1
-        when /^UPDATE\s+(.*)/
-          elements_to_replace << $1
+        if line =~ /^(add|rm|co -h)\s+(.*)/
+          @actions << [$1, $2]
         end
       end
     end
+  end
+
+  def apply_actions
+    elements_to_add = @actions.map { |a| a[1] if a[0] == 'add' }
+    elements_to_remove = @actions.map { |a| a[1] if a[0] == 'rm' }
+    elements_to_replace = @actions.map { |a| a[1] if a[0] == 'co -h' }
     apply_command(AddCommand.new, elements_to_add)
     apply_command(checkout_hijacked_command, elements_to_replace)
     apply_command(RemoveCommand.new, elements_to_remove)
@@ -994,9 +1006,13 @@ EOF
   end
 
   def execute
-    generate_control_file
-    edit_control_file
-    process_control_file
+    collect_actions
+    if @actions.empty?
+      puts "No changes required"
+      return
+    end
+    prompt_for_confirmation unless @noprompt
+    apply_actions
   end
 
 end
