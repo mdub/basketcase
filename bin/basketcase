@@ -550,7 +550,12 @@ class CheckinCommand < Command
     comment_file = Pathname.new("basketcase-comment.tmp")
     begin
       comment_file.open('w') do |out|
-        out.puts "# Checking in:"
+        out.puts <<EOF
+# Please enter the commit message for your changes.
+# (Comment lines starting with '#' will not be included)
+#
+# Changes to be committed:
+EOF
         specified_targets.each do |target|
           out.puts "#\t#{target}"
         end
