@@ -4,8 +4,6 @@
 # (cleartool) to enable more CVS-like (or Subversion-like) usage of
 # ClearCase.
 #
-# Warning: this script is EXPERIMENTAL: use AT YOUR OWN RISK
-#
 # @author Mike Williams
 
 $BASKETCASE = "basketcase"
@@ -116,237 +114,243 @@ def load_project_ignore_patterns
   require_ignore_patterns_for(Pathname.pwd)
 end
 
-#---( Output formatting )---
+module BasketCase
 
-# Represents the status of an element
-class ElementStatus
+  #---( Output formatting )---
 
-  def initialize(path, status, base_version = nil)
-    @path = path
-    @status = status
-    @base_version = base_version
-  end
+  # Represents the status of an element
+  class ElementStatus
 
-  attr_reader :path, :status, :base_version
-
-  def to_s
-    s = "#{path} (#{status})"
-    s += " [#{base_version}]" if base_version
-    return s
-  end
-
-end
-
-# Object responsible for nice fomatting of output
-class DefaultListener
-
-  def report(element)
-    printf("%-7s %-15s %s\n", element.status,
-                   element.base_version, element.path)
-  end
-
-end
-
-#---( Target list )---
-
-class TargetList
-
-  include Enumerable
-
-  def initialize(targets)
-    @target_paths = targets.map { |t| mkpath(t) }
-  end
-
-  def each
-    @target_paths.each do |t|
-      yield(t)
+    def initialize(path, status, base_version = nil)
+      @path = path
+      @status = status
+      @base_version = base_version
     end
-  end
 
-  def to_s
-    @target_paths.map { |f| "'#{f}'" }.join(" ")
-  end
+    attr_reader :path, :status, :base_version
 
-  def empty?
-    @target_paths.empty?
-  end
-
-  def size
-    @target_paths.size
-  end
-
-  def parents
-    TargetList.new(@target_paths.map { |t| t.parent }.uniq)
-  end
-
-end
-
-#---( Command registry )---
-
-$command_registry = {}
-
-def command(command_class, names)
-  names.each { |name| $command_registry[name] = command_class }
-  $USAGE << "    % #{names.join(', ')}\n"
-end
-
-class UsageException < Exception
-end
-
-def make_command(name)
-  raise UsageException, "no command specified" if name.nil?
-  command_class = $command_registry[name]
-  raise UsageException, "Unknown command: " + name unless command_class
-  command_class.new
-end
-
-#---( Commands )---
-
-# Base ClearCase command
-class Command
-
-  def synopsis
-    ""
-  end
-
-  def help
-    "Sorry, no help provided ..."
-  end
-
-  attr_writer :listener
-  attr_writer :targets
-
-  def initialize()
-    @listener = DefaultListener.new
-    @recursive = false
-    @graphical = false
-  end
-
-  def report(status, path, version = nil)
-    @listener.report(ElementStatus.new(path, status, version))
-  end
-
-  def option_recurse
-    @recursive = true
-  end
-
-  alias :option_r :option_recurse
-
-  def option_graphical
-    @graphical = true
-  end
-
-  alias :option_g :option_graphical
-
-  def option_comment(comment)
-    @comment = comment
-  end
-
-  alias :option_m :option_comment
-
-  attr_accessor :comment
-
-  # Handle command-line arguments:
-  # - For option arguments of the form "-X", call the corresponding
-  #   option_X() method.
-  # - Remaining arguments are stored in @targets
-  def accept_args(args)
-    while /^-+(.+)/ === args[0]
-      option = args.shift
-      option_method_name = "option_#{$1}"
-      unless respond_to?(option_method_name)
-        raise UsageException, "Unrecognised option: #{option}"
-      end
-      option_method = method(option_method_name)
-      option_method.call(*args.shift(option_method.arity))
+    def to_s
+      s = "#{path} (#{status})"
+      s += " [#{base_version}]" if base_version
+      return s
     end
-    @targets = args
-    self
+
   end
 
-  def effective_targets
-    TargetList.new(@targets.empty? ? ['.'] : @targets)
-  end
+  # Object responsible for nice fomatting of output
+  class DefaultListener
 
-  def specified_targets
-    raise UsageException, "No target specified" if @targets.empty?
-    TargetList.new(@targets)
-  end
-
-  private
-
-  def cleartool(command)
-    log_debug "RUNNING: cleartool #{command}"
-    IO.popen("cleartool " + command).each_line do |line|
-      line.sub!("\r", '')
-      log_debug "<<< " + line
-      yield(line) if block_given?
+    def report(element)
+      printf("%-7s %-15s %s\n", element.status,
+        element.base_version, element.path)
     end
+
   end
 
-  def cleartool_unsafe(command, &block)
-    if $test_mode
-      log_debug "WOULD RUN: cleartool #{command}"
-      return
+  #---( Target list )---
+
+  class TargetList
+
+    include Enumerable
+
+    def initialize(targets)
+      @target_paths = targets.map { |t| mkpath(t) }
     end
-    cleartool(command, &block)
-  end
 
-  def view_root
-    @root ||= catch(:root) do
-      cleartool("pwv -root") do |line|
-        throw :root, mkpath(line.chomp)
+    def each
+      @target_paths.each do |t|
+        yield(t)
       end
     end
-    log_debug "view_root = #{@root}"
-    @root
-  end
 
-  def cannot_deal_with(line)
-    $stderr.puts "unrecognised output: " + line
-  end
-
-  def edit(file)
-    editor = ENV["EDITOR"] || "notepad"
-    system("#{editor} #{file}")
-  end
-
-end
-
-class HelpCommand < Command
-
-  def synopsis
-    "[<command>]"
-  end
-
-  def help
-    "Display usage instructions."
-  end
-
-  def execute
-    if @targets.empty?
-      puts $USAGE
-      exit
+    def to_s
+      @target_paths.map { |f| "'#{f}'" }.join(" ")
     end
-    @targets.each do |command_name|
-      command = make_command(command_name)
-      puts
-      puts "% #{$BASKETCASE} #{command_name} #{command.synopsis}"
-      puts
-      puts command.help.gsub(/^/, "    ")
+
+    def empty?
+      @target_paths.empty?
     end
+
+    def size
+      @target_paths.size
+    end
+
+    def parents
+      TargetList.new(@target_paths.map { |t| t.parent }.uniq)
+    end
+
   end
 
-end
-
-class LsCommand < Command
-
-  def synopsis
-    "[<element> ...]"
+  class UsageException < Exception
   end
 
-  def help
-    <<EOF
+  #---( Command registry )---
+
+  @registry = {}
+
+  class << self
+
+    def command(command_class, names)
+      names.each { |name| @registry[name] = command_class }
+      $USAGE << "    % #{names.join(', ')}\n"
+    end
+
+    def make_command(name)
+      raise UsageException, "no command specified" if name.nil?
+      command_class = @registry[name]
+      raise UsageException, "Unknown command: " + name unless command_class
+      command_class.new
+    end
+
+  end
+
+  #---( Commands )---
+
+  # Base ClearCase command
+  class Command
+
+    def synopsis
+      ""
+    end
+
+    def help
+      "Sorry, no help provided ..."
+    end
+
+    attr_writer :listener
+    attr_writer :targets
+
+    def initialize()
+      @listener = DefaultListener.new
+      @recursive = false
+      @graphical = false
+    end
+
+    def report(status, path, version = nil)
+      @listener.report(ElementStatus.new(path, status, version))
+    end
+
+    def option_recurse
+      @recursive = true
+    end
+
+    alias :option_r :option_recurse
+
+    def option_graphical
+      @graphical = true
+    end
+
+    alias :option_g :option_graphical
+
+    def option_comment(comment)
+      @comment = comment
+    end
+
+    alias :option_m :option_comment
+
+    attr_accessor :comment
+
+    # Handle command-line arguments:
+    # - For option arguments of the form "-X", call the corresponding
+    #   option_X() method.
+    # - Remaining arguments are stored in @targets
+    def accept_args(args)
+      while /^-+(.+)/ === args[0]
+        option = args.shift
+        option_method_name = "option_#{$1}"
+        unless respond_to?(option_method_name)
+          raise UsageException, "Unrecognised option: #{option}"
+        end
+        option_method = method(option_method_name)
+        option_method.call(*args.shift(option_method.arity))
+      end
+      @targets = args
+      self
+    end
+
+    def effective_targets
+      TargetList.new(@targets.empty? ? ['.'] : @targets)
+    end
+
+    def specified_targets
+      raise UsageException, "No target specified" if @targets.empty?
+      TargetList.new(@targets)
+    end
+
+    private
+
+    def cleartool(command)
+      log_debug "RUNNING: cleartool #{command}"
+      IO.popen("cleartool " + command).each_line do |line|
+        line.sub!("\r", '')
+        log_debug "<<< " + line
+        yield(line) if block_given?
+      end
+    end
+
+    def cleartool_unsafe(command, &block)
+      if $test_mode
+        log_debug "WOULD RUN: cleartool #{command}"
+        return
+      end
+      cleartool(command, &block)
+    end
+
+    def view_root
+      @root ||= catch(:root) do
+        cleartool("pwv -root") do |line|
+          throw :root, mkpath(line.chomp)
+        end
+      end
+      log_debug "view_root = #{@root}"
+      @root
+    end
+
+    def cannot_deal_with(line)
+      $stderr.puts "unrecognised output: " + line
+    end
+
+    def edit(file)
+      editor = ENV["EDITOR"] || "notepad"
+      system("#{editor} #{file}")
+    end
+
+  end
+
+  class HelpCommand < Command
+
+    def synopsis
+      "[<command>]"
+    end
+
+    def help
+      "Display usage instructions."
+    end
+
+    def execute
+      if @targets.empty?
+        puts $USAGE
+        exit
+      end
+      @targets.each do |command_name|
+        command = BasketCase.make_command(command_name)
+        puts
+        puts "% #{$BASKETCASE} #{command_name} #{command.synopsis}"
+        puts
+        puts command.help.gsub(/^/, "    ")
+      end
+    end
+
+  end
+
+  class LsCommand < Command
+
+    def synopsis
+      "[<element> ...]"
+    end
+
+    def help
+      <<EOF
 List element status.
 
 -a(ll)      Show all files.
@@ -357,739 +361,737 @@ List element status.
 EOF
     end
 
-  def option_all
-    @include_all = true
-  end
+    def option_all
+      @include_all = true
+    end
 
-  alias :option_a :option_all
+    alias :option_a :option_all
 
-  def option_directory
-    @directory_only = true
-  end
+    def option_directory
+      @directory_only = true
+    end
 
-  alias :option_d :option_directory
+    alias :option_d :option_directory
 
-  def execute
-    args = ''
-    args += ' -recurse' if @recursive
-    args += ' -directory' if @directory_only
-    cleartool("ls #{args} #{effective_targets}") do |line|
-      case line
-      when /^(.+)@@(\S+) \[hijacked/
-        report(:HIJACK, mkpath($1), $2)
-      when /^(.+)@@(\S+) \[loaded but missing\]/
-        report(:MISSING, mkpath($1), $2)
-      when /^(.+)@@\S+\\CHECKEDOUT(?: from (\S+))?/
-        element_path = mkpath($1)
-        status = element_path.exist? ? :CO : :MISSING
-        report(status, element_path, $2 || 'new')
-      when /^(.+)@@(\S+) +Rule: /
-        next unless @include_all
-        report(:OK, mkpath($1), $2)
-      when /^(.+)/
-        path = mkpath($1)
-        if ignored?(path)
-          log_debug "ignoring #{path}"
-          next
+    def execute
+      args = ''
+      args += ' -recurse' if @recursive
+      args += ' -directory' if @directory_only
+      cleartool("ls #{args} #{effective_targets}") do |line|
+        case line
+        when /^(.+)@@(\S+) \[hijacked/
+          report(:HIJACK, mkpath($1), $2)
+        when /^(.+)@@(\S+) \[loaded but missing\]/
+          report(:MISSING, mkpath($1), $2)
+        when /^(.+)@@\S+\\CHECKEDOUT(?: from (\S+))?/
+          element_path = mkpath($1)
+          status = element_path.exist? ? :CO : :MISSING
+          report(status, element_path, $2 || 'new')
+        when /^(.+)@@(\S+) +Rule: /
+          next unless @include_all
+          report(:OK, mkpath($1), $2)
+        when /^(.+)/
+          path = mkpath($1)
+          if ignored?(path)
+            log_debug "ignoring #{path}"
+            next
+          end
+          report(:LOCAL, path)
+        else
+          cannot_deal_with line
         end
-        report(:LOCAL, path)
-      else
-        cannot_deal_with line
       end
     end
+
   end
 
-end
+  class LsCoCommand < Command
 
-class LsCoCommand < Command
+    def synopsis
+      "[-r] [-d] [<element> ...]"
+    end
 
-  def synopsis
-    "[-r] [-d] [<element> ...]"
-  end
+    def help
+      "List checkouts by ALL users"
+    end
 
-  def help
-    "List checkouts by ALL users"
-  end
+    def option_directory
+      @directory_only = true
+    end
 
-  def option_directory
-    @directory_only = true
-  end
+    alias :option_d :option_directory
 
-  alias :option_d :option_directory
-
-  def execute
-    args = ''
-    args += ' -recurse' if @recursive
-    args += ' -directory' if @directory_only
-    cleartool("lsco #{args} #{effective_targets}") do |line|
-      case line
-      when /^.*\s(\S+)\s+checkout.*version "(\S+)" from (\S+)/
-        report($1, mkpath($2), $3)
-      when /^Added /
-        # ignore
-      when /^  /
-        # ignore
-      else
-        cannot_deal_with line
+    def execute
+      args = ''
+      args += ' -recurse' if @recursive
+      args += ' -directory' if @directory_only
+      cleartool("lsco #{args} #{effective_targets}") do |line|
+        case line
+        when /^.*\s(\S+)\s+checkout.*version "(\S+)" from (\S+)/
+          report($1, mkpath($2), $3)
+        when /^Added /
+          # ignore
+        when /^  /
+          # ignore
+        else
+          cannot_deal_with line
+        end
       end
     end
+
   end
 
-end
+  class UpdateCommand < Command
 
-class UpdateCommand < Command
+    def synopsis
+      "[-nomerge] [<element> ...]"
+    end
 
-  def synopsis
-    "[-nomerge] [<element> ...]"
-  end
-
-  def help
-    <<EOF
+    def help
+      <<EOF
 Update your (snapshot) view.
 
 -nomerge    Don\'t attempt to merge in changes to checked-out files.
 EOF
 
-  end
+    end
 
-  def option_nomerge
-    @nomerge = true
-  end
+    def option_nomerge
+      @nomerge = true
+    end
 
-  def relative_path(s)
-    full_path = view_root + mkpath(s)
-    full_path.relative_path_from(Pathname.pwd)
-  end
+    def relative_path(s)
+      full_path = view_root + mkpath(s)
+      full_path.relative_path_from(Pathname.pwd)
+    end
 
-  def execute_update
-    args = '-log nul -force'
-    args += ' -print' if $test_mode
-    cleartool("update #{args} #{effective_targets}") do |line|
-      case line
-      when /^Processing dir "(.*)"/
-        # ignore
-      when /^\.*$/
-        # ignore
-      when /^Making dir "(.*)"/
-        report(:NEW, relative_path($1))
-      when /^Loading "(.*)"/
-        report(:UPDATED, relative_path($1))
-      when /^Unloaded "(.*)"/
-        report(:REMOVED, relative_path($1))
-      when /^Keeping hijacked object "(.*)" - base "(.*)"/
-        report(:HIJACK, relative_path($1), $2)
-      when /^Keeping "(.*)"/
-        # ignore
-      when /^End dir/
-        # ignore
-      when /^Done loading/
-        # ignore
+    def execute_update
+      args = '-log nul -force'
+      args += ' -print' if $test_mode
+      cleartool("update #{args} #{effective_targets}") do |line|
+        case line
+        when /^Processing dir "(.*)"/
+          # ignore
+        when /^\.*$/
+          # ignore
+        when /^Making dir "(.*)"/
+          report(:NEW, relative_path($1))
+        when /^Loading "(.*)"/
+          report(:UPDATED, relative_path($1))
+        when /^Unloaded "(.*)"/
+          report(:REMOVED, relative_path($1))
+        when /^Keeping hijacked object "(.*)" - base "(.*)"/
+          report(:HIJACK, relative_path($1), $2)
+        when /^Keeping "(.*)"/
+          # ignore
+        when /^End dir/
+          # ignore
+        when /^Done loading/
+          # ignore
+        else
+          cannot_deal_with line
+        end
+      end
+    end
+
+    def execute_merge
+      args = '-log nul -flatest '
+      if $test_mode
+        args += "-print"
+      elsif @graphical
+        args += "-gmerge"
       else
-        cannot_deal_with line
+        args += "-merge -gmerge"
+      end
+      cleartool("findmerge #{effective_targets} #{args}") do |line|
+        case line
+        when /^Needs Merge "(.+)" \[to \S+ from (\S+) base (\S+)\]/
+          report(:MERGE, mkpath($1), $2)
+        end
       end
     end
+
+    def execute
+      execute_update
+      execute_merge unless @nomerge
+    end
+
   end
 
-  def execute_merge
-    args = '-log nul -flatest '
-    if $test_mode
-      args += "-print"
-    elsif @graphical
-      args += "-gmerge"
-    else
-      args += "-merge -gmerge"
+  class CheckinCommand < Command
+
+    def synopsis
+      "<element> ..."
     end
-    cleartool("findmerge #{effective_targets} #{args}") do |line|
-      case line
-      when /^Needs Merge "(.+)" \[to \S+ from (\S+) base (\S+)\]/
-        report(:MERGE, mkpath($1), $2)
+
+    def help
+      "Check-in elements, prompting for a check-in message."
+    end
+
+    def execute
+      prompt_for_comment
+      comment_file = Pathname.new("basketcase-checkin-comment.tmp")
+      comment_file.open("w") do |out|
+        out.puts(@comment)
       end
-    end
-  end
-
-  def execute
-    execute_update
-    execute_merge unless @nomerge
-  end
-
-end
-
-class CheckinCommand < Command
-
-  def synopsis
-    "<element> ..."
-  end
-
-  def help
-    "Check-in elements, prompting for a check-in message."
-  end
-
-  def execute
-    prompt_for_comment
-    comment_file = Pathname.new("basketcase-checkin-comment.tmp")
-    comment_file.open("w") do |out|
-      out.puts(@comment)
-    end
-    cleartool_unsafe("checkin -cfile #{comment_file} #{specified_targets}") do |line|
-      case line
-      when /^Loading /
-        # ignore
-      when /^Making dir /
-        # ignore
-      when /^Checked in "(.+)" version "(\S+)"\./
-        report(:COMMIT, mkpath($1), $2)
-      else
-        cannot_deal_with line
+      cleartool_unsafe("checkin -cfile #{comment_file} #{specified_targets}") do |line|
+        case line
+        when /^Loading /
+          # ignore
+        when /^Making dir /
+          # ignore
+        when /^Checked in "(.+)" version "(\S+)"\./
+          report(:COMMIT, mkpath($1), $2)
+        else
+          cannot_deal_with line
+        end
       end
+      comment_file.unlink
     end
-    comment_file.unlink
-  end
 
-  def prompt_for_comment
-    return if @comment
-    comment_file = Pathname.new("basketcase-comment.tmp")
-    begin
-      comment_file.open('w') do |out|
-        out.puts <<EOF
+    def prompt_for_comment
+      return if @comment
+      comment_file = Pathname.new("basketcase-comment.tmp")
+      begin
+        comment_file.open('w') do |out|
+          out.puts <<EOF
 # Please enter the commit message for your changes.
 # (Comment lines starting with '#' will not be included)
 #
 # Changes to be committed:
 EOF
-        specified_targets.each do |target|
-          out.puts "#\t#{target}"
+          specified_targets.each do |target|
+            out.puts "#\t#{target}"
+          end
         end
+        edit(comment_file)
+        @comment = comment_file.read.gsub(/^#.*\n/, '')
+      ensure
+        comment_file.unlink
       end
-      edit(comment_file)
-      @comment = comment_file.read.gsub(/^#.*\n/, '')
-    ensure
-      comment_file.unlink
+      raise UsageException, "No check-in comment provided" if @comment.empty?
+      @comment
     end
-    raise UsageException, "No check-in comment provided" if @comment.empty?
-    @comment
+
   end
 
-end
+  class CheckoutCommand < Command
 
-class CheckoutCommand < Command
+    def synopsis
+      "<element> ..."
+    end
 
-  def synopsis
-    "<element> ..."
-  end
+    def help
+      ""
+    end
 
-  def help
-    ""
-  end
-
-  def help
-    <<EOF
+    def help
+      <<EOF
 Check-out elements (unreserved).
 By default, any hijacked version is discarded.
 
 -h(ijack)   Retain the hijacked version.
 EOF
-  end
+    end
 
-  def initialize
-    super
-    @keep_or_revert = '-nquery'
-  end
+    def initialize
+      super
+      @keep_or_revert = '-nquery'
+    end
 
-  def option_hijack
-    @keep_or_revert = '-usehijack'
-  end
+    def option_hijack
+      @keep_or_revert = '-usehijack'
+    end
 
-  alias :option_h :option_hijack
+    alias :option_h :option_hijack
 
-  def execute
-    cleartool_unsafe("checkout -unreserved -ncomment #{@keep_or_revert} #{specified_targets}") do |line|
-      case line
-      when /^Checked out "(.+)" from version "(\S+)"\./
-        report(:CO, mkpath($1), $2)
+    def execute
+      cleartool_unsafe("checkout -unreserved -ncomment #{@keep_or_revert} #{specified_targets}") do |line|
+        case line
+        when /^Checked out "(.+)" from version "(\S+)"\./
+          report(:CO, mkpath($1), $2)
+        end
       end
     end
+
   end
 
-end
+  class UncheckoutCommand < Command
 
-class UncheckoutCommand < Command
+    def synopsis
+      "[-r] <element> ..."
+    end
 
-  def synopsis
-    "[-r] <element> ..."
-  end
-
-  def help
-    <<EOF
+    def help
+      <<EOF
 Undo a checkout, reverting to the checked-in version.
 
 -r(emove)   Don\'t retain the existing version in a '.keep' file.
 EOF
-  end
+    end
 
-  def initialize
-    super
-    @action = '-keep'
-  end
+    def initialize
+      super
+      @action = '-keep'
+    end
 
-  def option_remove
-    @action = '-rm'
-  end
+    def option_remove
+      @action = '-rm'
+    end
 
-  alias :option_r :option_remove
+    alias :option_r :option_remove
 
-  attr_accessor :action
+    attr_accessor :action
 
-  def execute
-    cleartool_unsafe("uncheckout #{@action} #{specified_targets}") do |line|
-      case line
-      when /^Loading /
-        # ignore
-      when /^Making dir /
-        # ignore
-      when /^Checkout cancelled for "(.+)"\./
-        report(:UNCO, mkpath($1))
-      when /^Private version .* saved in "(.+)"\./
-        report(:KEPT, mkpath($1))
-      else
-        cannot_deal_with line
+    def execute
+      cleartool_unsafe("uncheckout #{@action} #{specified_targets}") do |line|
+        case line
+        when /^Loading /
+          # ignore
+        when /^Making dir /
+          # ignore
+        when /^Checkout cancelled for "(.+)"\./
+          report(:UNCO, mkpath($1))
+        when /^Private version .* saved in "(.+)"\./
+          report(:KEPT, mkpath($1))
+        else
+          cannot_deal_with line
+        end
       end
     end
+
   end
 
-end
+  class CollectingListener
 
-class CollectingListener
+    attr_reader :elements
 
-  attr_reader :elements
+    def initialize
+      @elements = []
+    end
 
-  def initialize
-    @elements = []
+    def report(element)
+      @elements << element
+    end
+
   end
 
-  def report(element)
-    @elements << element
+  class DirectoryModificationCommand < Command
+
+    def find_locked_elements(paths)
+      ls = LsCommand.new
+      ls.option_a
+      ls.option_d
+      ls.targets = paths
+      collector = CollectingListener.new
+      ls.listener = collector
+      ls.execute
+      collector.elements.find_all { |e| e.status == :OK }.collect(&:path)
+    end
+
+    def checkout(target_list)
+      return if target_list.empty?
+      co = CheckoutCommand.new
+      co.targets = target_list
+      co.execute
+    end
+
+    def unlock_parent_directories(target_list)
+      checkout find_locked_elements(target_list.parents)
+    end
+
   end
 
-end
+  class RemoveCommand < DirectoryModificationCommand
 
-class DirectoryModificationCommand < Command
+    def synopsis
+      "<element> ..."
+    end
 
-  def find_locked_elements(paths)
-    ls = LsCommand.new
-    ls.option_a
-    ls.option_d
-    ls.targets = paths
-    collector = CollectingListener.new
-    ls.listener = collector
-    ls.execute
-    collector.elements.find_all { |e| e.status == :OK }.collect(&:path)
-  end
-
-  def checkout(target_list)
-    return if target_list.empty?
-    co = CheckoutCommand.new
-    co.targets = target_list
-    co.execute
-  end
-
-  def unlock_parent_directories(target_list)
-    checkout find_locked_elements(target_list.parents)
-  end
-
-end
-
-class RemoveCommand < DirectoryModificationCommand
-
-  def synopsis
-    "<element> ..."
-  end
-
-  def help
-    <<EOF
+    def help
+      <<EOF
 Mark an element as deleted.
 (Parent directories are checked-out automatically)
 EOF
-  end
+    end
 
-  def execute
-    unlock_parent_directories(specified_targets)
-    cleartool_unsafe("rmname -ncomment #{specified_targets}") do |line|
-      case line
-      when /^Unloaded /
-        # ignore
-      when /^Removed "(.+)"\./
-        report(:REMOVED, mkpath($1))
-      else
-        cannot_deal_with line
+    def execute
+      unlock_parent_directories(specified_targets)
+      cleartool_unsafe("rmname -ncomment #{specified_targets}") do |line|
+        case line
+        when /^Unloaded /
+          # ignore
+        when /^Removed "(.+)"\./
+          report(:REMOVED, mkpath($1))
+        else
+          cannot_deal_with line
+        end
       end
     end
+
   end
 
-end
+  class AddCommand < DirectoryModificationCommand
 
-class AddCommand < DirectoryModificationCommand
+    def synopsis
+      "<element> ..."
+    end
 
-  def synopsis
-    "<element> ..."
-  end
-
-  def help
-    <<EOF
+    def help
+      <<EOF
 Add elements to the repository.
 (Parent directories are checked-out automatically)
 EOF
-  end
+    end
 
-  def execute
-    unlock_parent_directories(specified_targets)
-    cleartool_unsafe("mkelem -ncomment #{specified_targets}") do |line|
-      case line
-      when /^Created element /
-        # ignore
-      when /^Checked out "(.+)" from version "(\S+)"\./
-        report(:ADDED, mkpath($1), $2)
-      else
-        cannot_deal_with line
+    def execute
+      unlock_parent_directories(specified_targets)
+      cleartool_unsafe("mkelem -ncomment #{specified_targets}") do |line|
+        case line
+        when /^Created element /
+          # ignore
+        when /^Checked out "(.+)" from version "(\S+)"\./
+          report(:ADDED, mkpath($1), $2)
+        else
+          cannot_deal_with line
+        end
       end
     end
+
   end
 
-end
+  class MoveCommand < DirectoryModificationCommand
 
-class MoveCommand < DirectoryModificationCommand
+    def synopsis
+      "<from> <to>"
+    end
 
-  def synopsis
-    "<from> <to>"
-  end
-
-  def help
-    <<EOF
+    def help
+      <<EOF
 Move/rename an element.
 (Parent directories are checked-out automatically)
 EOF
-  end
+    end
 
-  def execute
-    raise UsageException, "expected two arguments" unless (specified_targets.size == 2)
-    unlock_parent_directories(specified_targets)
-    cleartool_unsafe("move -ncomment #{specified_targets}") do |line|
-      case line
-      when /^Moved "(.+)" to "(.+)"\./
-        report(:REMOVED, mkpath($1))
-        report(:ADDED, mkpath($2))
-      else
-        cannot_deal_with line
+    def execute
+      raise UsageException, "expected two arguments" unless (specified_targets.size == 2)
+      unlock_parent_directories(specified_targets)
+      cleartool_unsafe("move -ncomment #{specified_targets}") do |line|
+        case line
+        when /^Moved "(.+)" to "(.+)"\./
+          report(:REMOVED, mkpath($1))
+          report(:ADDED, mkpath($2))
+        else
+          cannot_deal_with line
+        end
       end
     end
+
   end
 
-end
+  class DiffCommand < Command
 
-class DiffCommand < Command
+    def synopsis
+      "[-g] <element>"
+    end
 
-  def synopsis
-    "[-g] <element>"
-  end
-
-  def help
-    <<EOF
+    def help
+      <<EOF
 Compare a file to the latest checked-in version.
 
 -g          Graphical display.
 EOF
+    end
+
+    def execute
+      args = ''
+      args += ' -graphical' if @graphical
+      specified_targets.each do |target|
+        cleartool("diff #{args} -predecessor #{target}") do |line|
+          puts line
+        end
+      end
+    end
+
   end
 
-  def execute
-    args = ''
-    args += ' -graphical' if @graphical
-    specified_targets.each do |target|
-      cleartool("diff #{args} -predecessor #{target}") do |line|
+  class LogCommand < Command
+
+    def synopsis
+      "[<element> ...]"
+    end
+
+    def help
+      <<EOF
+List the history of specified elements.
+EOF
+    end
+
+    def option_directory
+      @directory_only = true
+    end
+
+    alias :option_d :option_directory
+
+    def execute
+      args = ''
+      args += ' -recurse' if @recursive
+      args += ' -directory' if @directory_only
+      args += ' -graphical' if @graphical
+      cleartool("lshistory #{args} #{effective_targets}") do |line|
         puts line
       end
     end
+
   end
 
-end
+  class VersionTreeCommand < Command
 
-class LogCommand < Command
-
-  def synopsis
-    "[<element> ...]"
-  end
-
-  def help
-    <<EOF
-List the history of specified elements.
-EOF
-  end
-
-  def option_directory
-    @directory_only = true
-  end
-
-  alias :option_d :option_directory
-
-  def execute
-    args = ''
-    args += ' -recurse' if @recursive
-    args += ' -directory' if @directory_only
-    args += ' -graphical' if @graphical
-    cleartool("lshistory #{args} #{effective_targets}") do |line|
-      puts line
+    def synopsis
+      "<element>"
     end
-  end
 
-end
-
-class VersionTreeCommand < Command
-
-  def synopsis
-    "<element>"
-  end
-
-  def help
-    <<EOF
+    def help
+      <<EOF
 Display a version-tree of specified elements.
 
 -g          Graphical display.
 EOF
-  end
-
-  def execute
-    args = ''
-    args += ' -graphical' if @graphical
-    cleartool("lsvtree #{args} #{effective_targets}") do |line|
-      puts line
     end
+
+    def execute
+      args = ''
+      args += ' -graphical' if @graphical
+      cleartool("lsvtree #{args} #{effective_targets}") do |line|
+        puts line
+      end
+    end
+
   end
 
-end
+  class AutoCommand < Command
 
-class AutoCommand < Command
+    def list_elements
+      ls = LsCommand.new
+      ls.option_r
+      ls.targets = effective_targets
+      collector = CollectingListener.new
+      ls.listener = collector
+      ls.execute
+      collector.elements
+    end
 
-  def list_elements
-    ls = LsCommand.new
-    ls.option_r
-    ls.targets = effective_targets
-    collector = CollectingListener.new
-    ls.listener = collector
-    ls.execute
-    collector.elements
+    def find_checkouts
+      list_elements.find_all { |e| e.status == :CO }.collect(&:path)
+    end
+
   end
 
-  def find_checkouts
-    list_elements.find_all { |e| e.status == :CO }.collect(&:path)
-  end
+  class AutoCheckinCommand < AutoCommand
 
-end
+    def synopsis
+      "[<element> ...]"
+    end
 
-class AutoCheckinCommand < AutoCommand
-
-  def synopsis
-    "[<element> ...]"
-  end
-
-  def help
-    <<EOF
+    def help
+      <<EOF
 Bulk commit: check-in all checked-out elements.
 EOF
-  end
-
-  def execute
-    checked_out_elements = find_checkouts
-    if checked_out_elements.empty?
-      puts "Nothing to check-in"
-      return
     end
-    ci = CheckinCommand.new
-    ci.comment = self.comment
-    ci.targets = checked_out_elements
-    ci.execute
+
+    def execute
+      checked_out_elements = find_checkouts
+      if checked_out_elements.empty?
+        puts "Nothing to check-in"
+        return
+      end
+      ci = CheckinCommand.new
+      ci.comment = self.comment
+      ci.targets = checked_out_elements
+      ci.execute
+    end
+
   end
 
-end
+  class AutoUncheckoutCommand < AutoCommand
 
-class AutoUncheckoutCommand < AutoCommand
+    def synopsis
+      "[<element> ...]"
+    end
 
-  def synopsis
-    "[<element> ...]"
-  end
-
-  def help
-    <<EOF
+    def help
+      <<EOF
 Bulk revert: revert all checked-out elements.
 EOF
-  end
-
-  def execute
-    checked_out_elements = find_checkouts
-    if checked_out_elements.empty?
-      puts "Nothing to revert"
-      return
     end
-    unco = UncheckoutCommand.new
-    unco.option_remove
-    unco.targets = checked_out_elements
-    unco.execute
+
+    def execute
+      checked_out_elements = find_checkouts
+      if checked_out_elements.empty?
+        puts "Nothing to revert"
+        return
+      end
+      unco = UncheckoutCommand.new
+      unco.option_remove
+      unco.targets = checked_out_elements
+      unco.execute
+    end
+
   end
 
-end
+  class AutoSyncCommand < AutoCommand
 
-class AutoSyncCommand < AutoCommand
+    def initialize
+      super
+      @control_file = Pathname.new("basketcase-autosync.tmp")
+      @actions = []
+    end
 
-  def initialize
-    super
-    @control_file = Pathname.new("basketcase-autosync.tmp")
-    @actions = []
-  end
+    def synopsis
+      "[<element> ...]"
+    end
 
-  def synopsis
-    "[<element> ...]"
-  end
-
-  def help
-    <<EOF
+    def help
+      <<EOF
 Bulk add/remove: offer to add new elements, and remove missing ones.
 
 -n          Don\'t prompt to confirm actions.
 EOF
-  end
+    end
 
-  def option_noprompt
-    @noprompt = true
-  end
+    def option_noprompt
+      @noprompt = true
+    end
 
-  alias :option_n :option_noprompt
+    alias :option_n :option_noprompt
 
-  def collect_actions
-    list_elements.each do |e|
-      case e.status
-      when :LOCAL
-        @actions << ['add', e.path]
-      when :MISSING
-        @actions << ['rm', e.path]
-      when :HIJACK
-        @actions << ['co -h', e.path]
+    def collect_actions
+      list_elements.each do |e|
+        case e.status
+        when :LOCAL
+          @actions << ['add', e.path]
+        when :MISSING
+          @actions << ['rm', e.path]
+        when :HIJACK
+          @actions << ['co -h', e.path]
+        end
       end
     end
-  end
 
-  def prompt_for_confirmation
-    @control_file.open('w') do |control|
-      control.puts <<EOF
+    def prompt_for_confirmation
+      @control_file.open('w') do |control|
+        control.puts <<EOF
 # #{$BASKETCASE} proposes the actions listed below.
 # Delete any that you don't wish to occur, then save this file.
 #
 EOF
-      @actions.each do |a|
-        control.puts a.join("\t")
+        @actions.each do |a|
+          control.puts a.join("\t")
+        end
       end
-    end
-    edit(@control_file)
-    @actions = []
-    @control_file.open('r') do |control|
-      control.each_line do |line|
-        if line =~ /^(add|rm|co -h)\s+(.*)/
-          @actions << [$1, $2]
+      edit(@control_file)
+      @actions = []
+      @control_file.open('r') do |control|
+        control.each_line do |line|
+          if line =~ /^(add|rm|co -h)\s+(.*)/
+            @actions << [$1, $2]
+          end
         end
       end
     end
-  end
 
-  def apply_actions
-    elements_to_add = @actions.map { |a| a[1] if a[0] == 'add' }.compact
-    elements_to_remove = @actions.map { |a| a[1] if a[0] == 'rm' }.compact
-    elements_to_replace = @actions.map { |a| a[1] if a[0] == 'co -h' }.compact
-    apply_command(AddCommand.new, elements_to_add)
-    apply_command(checkout_hijacked_command, elements_to_replace)
-    apply_command(RemoveCommand.new, elements_to_remove)
-  end
-
-  def apply_command(command, targets)
-    return if targets.empty?
-    command.targets = targets
-    command.execute
-  end
-
-
-  def checkout_hijacked_command
-    cmd = CheckoutCommand.new
-    cmd.option_hijack
-    cmd
-  end
-
-  def execute
-    collect_actions
-    if @actions.empty?
-      puts "No changes required"
-      return
+    def apply_actions
+      elements_to_add = @actions.map { |a| a[1] if a[0] == 'add' }.compact
+      elements_to_remove = @actions.map { |a| a[1] if a[0] == 'rm' }.compact
+      elements_to_replace = @actions.map { |a| a[1] if a[0] == 'co -h' }.compact
+      apply_command(AddCommand.new, elements_to_add)
+      apply_command(checkout_hijacked_command, elements_to_replace)
+      apply_command(RemoveCommand.new, elements_to_remove)
     end
-    prompt_for_confirmation unless @noprompt
-    apply_actions
+
+    def apply_command(command, targets)
+      return if targets.empty?
+      command.targets = targets
+      command.execute
+    end
+
+
+    def checkout_hijacked_command
+      cmd = CheckoutCommand.new
+      cmd.option_hijack
+      cmd
+    end
+
+    def execute
+      collect_actions
+      if @actions.empty?
+        puts "No changes required"
+        return
+      end
+      prompt_for_confirmation unless @noprompt
+      apply_actions
+    end
+
   end
 
-end
+  #---( Register commands )---
 
-#---( Register commands )---
+  command LsCommand,              %w(list ls status stat)
+  command LsCoCommand,            %w(lsco)
+  command DiffCommand,            %w(diff)
+  command LogCommand,             %w(log history)
+  command VersionTreeCommand,     %w(tree vtree)
 
-command LsCommand,              %w(list ls status stat)
-command LsCoCommand,            %w(lsco)
-command DiffCommand,            %w(diff)
-command LogCommand,             %w(log history)
-command VersionTreeCommand,     %w(tree vtree)
+  command UpdateCommand,          %w(update up)
+  command CheckinCommand,         %w(checkin ci commit)
+  command CheckoutCommand,        %w(checkout co edit)
+  command UncheckoutCommand,      %w(uncheckout unco revert)
+  command AddCommand,             %w(add)
+  command RemoveCommand,          %w(remove rm delete del)
+  command MoveCommand,            %w(move mv rename)
+  command AutoCheckinCommand,     %w(auto-checkin auto-ci auto-commit)
+  command AutoUncheckoutCommand,  %w(auto-uncheckout auto-unco auto-revert)
+  command AutoSyncCommand,        %w(auto-sync auto-addrm)
 
-command UpdateCommand,          %w(update up)
-command CheckinCommand,         %w(checkin ci commit)
-command CheckoutCommand,        %w(checkout co edit)
-command UncheckoutCommand,      %w(uncheckout unco revert)
-command AddCommand,             %w(add)
-command RemoveCommand,          %w(remove rm delete del)
-command MoveCommand,            %w(move mv rename)
-command AutoCheckinCommand,     %w(auto-checkin auto-ci auto-commit)
-command AutoUncheckoutCommand,  %w(auto-uncheckout auto-unco auto-revert)
-command AutoSyncCommand,        %w(auto-sync auto-addrm)
+  command HelpCommand,            %w(help)
 
-command HelpCommand,            %w(help)
+  #---( Command-line processing )---
 
-#---( Command-line processing )---
+  class CommandLine
 
-class CommandLine
-
-  def handle_global_options
-    while /^-/ === @args[0]
-      option = @args.shift
-      case option
-      when '--test', '-t'
-        $test_mode = true
-      when '--debug', '-d'
-        $debug_mode = true
-      else
-        raise UsageException, "Unrecognised global argument: #{option}"
+    def handle_global_options
+      while /^-/ === @args[0]
+        option = @args.shift
+        case option
+        when '--test', '-t'
+          $test_mode = true
+        when '--debug', '-d'
+          $debug_mode = true
+        else
+          raise UsageException, "Unrecognised global argument: #{option}"
+        end
       end
     end
-  end
 
-  def do(*args)
-    @args = args
-    begin
-      handle_global_options
-      define_standard_ignore_patterns
-      load_project_ignore_patterns
-      @command = make_command(@args.shift)
-      @command.accept_args(@args)
-      @command.execute
-    rescue UsageException => usage
-      $stderr.puts "ERROR: #{usage.message}"
-      $stderr.puts
-      $stderr.puts "try '#{$BASKETCASE} help' for usage info"
-      exit(1)
+    def do(*args)
+      @args = args
+      begin
+        handle_global_options
+        define_standard_ignore_patterns
+        load_project_ignore_patterns
+        @command = BasketCase.make_command(@args.shift)
+        @command.accept_args(@args)
+        @command.execute
+      rescue UsageException => usage
+        $stderr.puts "ERROR: #{usage.message}"
+        $stderr.puts
+        $stderr.puts "try '#{$BASKETCASE} help' for usage info"
+        exit(1)
+      end
     end
+
   end
 
 end
 
-CommandLine.new.do(*ARGV)
-
-# TODO:
-# - recursive checkout?
-# - automatic uncheckout of files that can't be merged (for Durran)
+BasketCase::CommandLine.new.do(*ARGV)
