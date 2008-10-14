@@ -6,10 +6,21 @@
 #
 # @author Mike Williams
 
-$BASKETCASE = "basketcase"
+require 'pathname'
 
-$USAGE = <<EOF
-usage: #{$BASKETCASE} <command> [<options>]
+class Symbol
+  def to_proc
+    proc { |obj, *args| obj.send(self, *args) }
+  end
+end
+
+$stdout.sync = true
+$stderr.sync = true
+
+module BasketCase
+
+  @usage = <<EOF
+usage: basketcase <command> [<options>]
 
 GLOBAL OPTIONS
 
@@ -18,103 +29,110 @@ GLOBAL OPTIONS
 
     -d/--debug  debug cleartool interaction
 
-COMMANDS        (type '$BASKETCASE help <command>' for details)
+COMMANDS        (type 'basketcase help <command>' for details)
 
 EOF
-# ... command details are added below ...
 
-#---( Imports )---
+  #---( Utils )---
 
-require 'pathname'
+  module Utils
 
-#---( Globals )---
-
-$test_mode = false
-$debug_mode = false
-
-$stdout.sync = true
-$stderr.sync = true
-
-#---( Utilities )---
-
-def mkpath(path)
-  path = path.to_str
-  path = path.tr('\\', '/')
-  path = path.sub(%r{^\./},'')
-  path = path.sub(%r{^([A-Za-z]):\/}, '/cygdrive/\1/')
-  Pathname.new(path)
-end
-
-def log_debug(msg)
-  return unless $debug_mode
-  $stderr.puts(msg)
-end
-
-class Symbol
-  def to_proc
-    proc { |obj, *args| obj.send(self, *args) }
-  end
-end
-
-#---( Ignorance is bliss )---
-
-$ignore_patterns = []
-class << $ignore_patterns
-  def add(path_pattern)
-    path = File.expand_path(path_pattern)
-    log_debug "ignore #{path}"
-    self << path
-  end
-end
-
-def ignore(pattern)
-  pattern = pattern.to_str
-  if pattern[-1,1] == '/'                      # a directory
-    $ignore_patterns.add pattern.chop          # ignore the directory itself
-    $ignore_patterns.add pattern + '**/*'      # and any files within it
-  else
-    $ignore_patterns.add pattern
-  end
-end
-
-def ignored?(path)
-  path = Pathname(path).expand_path
-  require_ignore_patterns_for(path.parent)
-  $ignore_patterns.detect do |pattern|
-    File.fnmatch(pattern, path, File::FNM_PATHNAME | File::FNM_DOTMATCH)
-  end
-end
-
-def define_standard_ignore_patterns
-  # Standard ignore patterns
-  ignore "**/*.hijacked"
-  ignore "**/*.keep"
-  ignore "**/*.keep.[0-9]"
-  ignore "**/#*#"
-  ignore "**/*~"
-  ignore "**/basketcase-*.tmp"
-end
-
-$ignore_patterns_loaded = {}
-def require_ignore_patterns_for(dir)
-  dir = Pathname(dir).expand_path
-  return(nil) if $ignore_patterns_loaded[dir]
-  require_ignore_patterns_for(dir.parent) unless dir.root?
-  bcignore_file = dir + ".bcignore"
-  if bcignore_file.exist?
-    bcignore_file.each_line do |line|
-      next if line =~ %r{^#}
-      ignore(dir + line.strip)
+    def mkpath(path)
+      path = path.to_str
+      path = path.tr('\\', '/')
+      path = path.sub(%r{^\./},'')
+      path = path.sub(%r{^([A-Za-z]):\/}, '/cygdrive/\1/')
+      Pathname.new(path)
     end
+
+    def log_debug(msg)
+      return unless BasketCase.debug_mode
+      $stderr.puts(msg)
+    end
+
+    def ignored?(path)
+      BasketCase.ignored?(path)
+    end
+
   end
-  $ignore_patterns_loaded[dir] = true
-end
 
-def load_project_ignore_patterns
-  require_ignore_patterns_for(Pathname.pwd)
-end
+  #---( Module state )---
 
-module BasketCase
+  @test_mode = false
+  @debug_mode = false
+  @ignore_patterns = []
+  @ignore_patterns_loaded = {}
+
+  class << self
+
+    attr_reader :test_mode
+    attr_reader :debug_mode
+
+  end
+
+  class << @ignore_patterns
+
+    include BasketCase::Utils
+
+    def add(path_pattern)
+      path = File.expand_path(path_pattern)
+      log_debug "ignore #{path}"
+      self << path
+    end
+
+  end
+
+  class << self
+
+    #---( Ignorance is bliss )---
+
+    def ignore(pattern)
+      pattern = pattern.to_str
+      if pattern[-1,1] == '/'                      # a directory
+        @ignore_patterns.add pattern.chop          # ignore the directory itself
+        @ignore_patterns.add pattern + '**/*'      # and any files within it
+      else
+        @ignore_patterns.add pattern
+      end
+    end
+
+    def ignored?(path)
+      path = Pathname(path).expand_path
+      require_ignore_patterns_for(path.parent)
+      @ignore_patterns.detect do |pattern|
+        File.fnmatch(pattern, path, File::FNM_PATHNAME | File::FNM_DOTMATCH)
+      end
+    end
+
+    def define_standard_ignore_patterns
+      # Standard ignore patterns
+      ignore "**/*.hijacked"
+      ignore "**/*.keep"
+      ignore "**/*.keep.[0-9]"
+      ignore "**/#*#"
+      ignore "**/*~"
+      ignore "**/basketcase-*.tmp"
+    end
+
+    def require_ignore_patterns_for(dir)
+      dir = Pathname(dir).expand_path
+      return(nil) if @ignore_patterns_loaded[dir]
+      require_ignore_patterns_for(dir.parent) unless dir.root?
+      bcignore_file = dir + ".bcignore"
+      if bcignore_file.exist?
+        bcignore_file.each_line do |line|
+          next if line =~ %r{^#}
+          ignore(dir + line.strip)
+        end
+      end
+      @ignore_patterns_loaded[dir] = true
+    end
+
+    def load_project_ignore_patterns
+      require_ignore_patterns_for(Pathname.pwd)
+    end
+
+  end
 
   #---( Output formatting )---
 
@@ -152,6 +170,7 @@ module BasketCase
   class TargetList
 
     include Enumerable
+    include BasketCase::Utils
 
     def initialize(targets)
       @target_paths = targets.map { |t| mkpath(t) }
@@ -192,7 +211,7 @@ module BasketCase
 
     def command(command_class, names)
       names.each { |name| @registry[name] = command_class }
-      $USAGE << "    % #{names.join(', ')}\n"
+      @usage << "    % #{names.join(', ')}\n"
     end
 
     def make_command(name)
@@ -208,6 +227,8 @@ module BasketCase
 
   # Base ClearCase command
   class Command
+
+    include BasketCase::Utils
 
     def synopsis
       ""
@@ -329,13 +350,13 @@ module BasketCase
 
     def execute
       if @targets.empty?
-        puts $USAGE
+        puts Basketbase.usage
         exit
       end
       @targets.each do |command_name|
         command = BasketCase.make_command(command_name)
         puts
-        puts "% #{$BASKETCASE} #{command_name} #{command.synopsis}"
+        puts "% basketcase #{command_name} #{command.synopsis}"
         puts
         puts command.help.gsub(/^/, "    ")
       end
@@ -981,7 +1002,7 @@ EOF
     def prompt_for_confirmation
       @control_file.open('w') do |control|
         control.puts <<EOF
-# #{$BASKETCASE} proposes the actions listed below.
+# basketcase proposes the actions listed below.
 # Delete any that you don't wish to occur, then save this file.
 #
 EOF
@@ -1077,15 +1098,15 @@ EOF
       @args = args
       begin
         handle_global_options
-        define_standard_ignore_patterns
-        load_project_ignore_patterns
+        BasketCase.define_standard_ignore_patterns
+        BasketCase.load_project_ignore_patterns
         @command = BasketCase.make_command(@args.shift)
         @command.accept_args(@args)
         @command.execute
       rescue UsageException => usage
         $stderr.puts "ERROR: #{usage.message}"
         $stderr.puts
-        $stderr.puts "try '#{$BASKETCASE} help' for usage info"
+        $stderr.puts "try 'basketcase help' for usage info"
         exit(1)
       end
     end
