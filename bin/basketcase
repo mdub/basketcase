@@ -214,11 +214,11 @@ EOF
       @usage << "    % #{names.join(', ')}\n"
     end
 
-    def make_command(name)
+    def make_command(basket_case, name)
       raise UsageException, "no command specified" if name.nil?
       command_class = @registry[name]
       raise UsageException, "Unknown command: " + name unless command_class
-      command_class.new
+      command_class.new(basket_case)
     end
 
   end
@@ -241,7 +241,8 @@ EOF
     attr_writer :listener
     attr_writer :targets
 
-    def initialize()
+    def initialize(basket_case)
+      @basket_case = basket_case
       @listener = DefaultListener.new
       @recursive = false
       @graphical = false
@@ -1100,7 +1101,7 @@ EOF
         handle_global_options
         BasketCase.define_standard_ignore_patterns
         BasketCase.load_project_ignore_patterns
-        @command = BasketCase.make_command(@args.shift)
+        @command = BasketCase.make_command(self, @args.shift)
         @command.accept_args(@args)
         @command.execute
       rescue UsageException => usage
