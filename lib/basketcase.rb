@@ -196,15 +196,15 @@ EOF
       "Sorry, no help provided ..."
     end
 
-    attr_writer :listener
-    attr_writer :targets
-
     def initialize(basketcase)
       @basketcase = basketcase
       @listener = DefaultListener.new
       @recursive = false
       @graphical = false
     end
+
+    attr_writer :listener
+    attr_writer :targets
 
     def report(status, path, version = nil)
       @listener.report(ElementStatus.new(path, status, version))
@@ -309,11 +309,11 @@ EOF
 
     def execute
       if @targets.empty?
-        puts Basketbase.usage
+        puts @basketcase.usage
         exit
       end
       @targets.each do |command_name|
-        command = Basketcase.make_command(command_name)
+        command = @basketcase.make_command(command_name)
         puts
         puts "% basketcase #{command_name} #{command.synopsis}"
         puts
@@ -1032,6 +1032,8 @@ EOF
       command_class.new(basketcase)
     end
 
+    attr_reader :usage
+
   end
 
   command LsCommand,              %w(list ls status stat)
@@ -1052,6 +1054,14 @@ EOF
   command AutoSyncCommand,        %w(auto-sync auto-addrm)
 
   command HelpCommand,            %w(help)
+
+  def usage
+    Basketcase.usage
+  end
+
+  def make_command(name)
+    Basketcase.make_command(self, name)
+  end
 
   #---( Command-line processing )---
 
@@ -1081,7 +1091,7 @@ EOF
       handle_global_options
       define_standard_ignore_patterns
       load_project_ignore_patterns
-      @command = Basketcase.make_command(self, @args.shift)
+      @command = make_command(@args.shift)
       @command.accept_args(@args)
       @command.execute
     rescue UsageException => usage
