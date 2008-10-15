@@ -77,6 +77,11 @@ way:
 
 Mike wrote BasketCase in frustration.
 
+== See also
+
+* http://rubyforge.org/projects/basketcase/
+* http://dogbiscuit.org/mudb/
+
 == License
 
 (The MIT License)
