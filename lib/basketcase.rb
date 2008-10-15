@@ -186,7 +186,7 @@ EOF
     include Basketcase::Utils
 
     extend Forwardable
-    def_delegators :@basketcase, :log_debug, :just_testing?, :ignored?
+    def_delegators :@basketcase, :log_debug, :just_testing?, :ignored?, :make_command, :exec_command
 
     def synopsis
       ""
@@ -270,7 +270,7 @@ EOF
 
     def cleartool_unsafe(command, &block)
       if just_testing?
-        log_debug "WOULD RUN: cleartool #{command}"
+        puts "WOULD RUN: cleartool #{command}"
         return
       end
       cleartool(command, &block)
@@ -574,8 +574,8 @@ By default, any hijacked version is discarded.
 EOF
     end
 
-    def initialize
-      super
+    def initialize(*args)
+      super(*args)
       @keep_or_revert = '-nquery'
     end
 
@@ -610,8 +610,8 @@ Undo a checkout, reverting to the checked-in version.
 EOF
     end
 
-    def initialize
-      super
+    def initialize(*args)
+      super(*args)
       @action = '-keep'
     end
 
@@ -659,21 +659,19 @@ EOF
   class DirectoryModificationCommand < Command
 
     def find_locked_elements(paths)
-      ls = LsCommand.new
-      ls.option_a
-      ls.option_d
-      ls.targets = paths
       collector = CollectingListener.new
-      ls.listener = collector
-      ls.execute
+      exec_command(LsCommand) do |ls|
+        ls.option_a
+        ls.option_d
+        ls.targets = paths
+        ls.listener = collector
+      end
       collector.elements.find_all { |e| e.status == :OK }.collect { |e| e.path }
     end
 
     def checkout(target_list)
       return if target_list.empty?
-      co = CheckoutCommand.new
-      co.targets = target_list
-      co.execute
+      exec_command(CheckoutCommand) { |co| co.targets = target_list }
     end
 
     def unlock_parent_directories(target_list)
@@ -852,12 +850,12 @@ EOF
   class AutoCommand < Command
 
     def list_elements
-      ls = LsCommand.new
-      ls.option_r
-      ls.targets = effective_targets
       collector = CollectingListener.new
-      ls.listener = collector
-      ls.execute
+      exec_command(LsCommand) do |ls|
+        ls.option_r
+        ls.targets = effective_targets
+        ls.listener = collector
+      end
       collector.elements
     end
 
@@ -885,10 +883,10 @@ EOF
         puts "Nothing to check-in"
         return
       end
-      ci = CheckinCommand.new
-      ci.comment = self.comment
-      ci.targets = checked_out_elements
-      ci.execute
+      exec_command(CheckinCommand) do |ci|
+        ci.comment = self.comment
+        ci.targets = checked_out_elements
+      end
     end
 
   end
@@ -911,7 +909,7 @@ EOF
         puts "Nothing to revert"
         return
       end
-      unco = UncheckoutCommand.new
+      unco = @basketcase.make_command(UncheckoutCommand)
       unco.option_remove
       unco.targets = checked_out_elements
       unco.execute
@@ -921,8 +919,8 @@ EOF
 
   class AutoSyncCommand < AutoCommand
 
-    def initialize
-      super
+    def initialize(*args)
+      super(*args)
       @control_file = Pathname.new("basketcase-autosync.tmp")
       @actions = []
     end
@@ -984,9 +982,9 @@ EOF
       elements_to_add = @actions.map { |a| a[1] if a[0] == 'add' }.compact
       elements_to_remove = @actions.map { |a| a[1] if a[0] == 'rm' }.compact
       elements_to_replace = @actions.map { |a| a[1] if a[0] == 'co -h' }.compact
-      apply_command(AddCommand.new, elements_to_add)
+      apply_command(make_command(AddCommand), elements_to_add)
       apply_command(checkout_hijacked_command, elements_to_replace)
-      apply_command(RemoveCommand.new, elements_to_remove)
+      apply_command(make_command(RemoveCommand), elements_to_remove)
     end
 
     def apply_command(command, targets)
@@ -997,7 +995,7 @@ EOF
 
 
     def checkout_hijacked_command
-      cmd = CheckoutCommand.new
+      cmd = make_command(CheckoutCommand)
       cmd.option_hijack
       cmd
     end
@@ -1025,11 +1023,10 @@ EOF
       @usage << "    % #{names.join(', ')}\n"
     end
 
-    def make_command(basketcase, name)
+    def command_class(name)
       raise UsageException, "no command specified" if name.nil?
-      command_class = @registry[name]
-      raise UsageException, "Unknown command: " + name unless command_class
-      command_class.new(basketcase)
+      return name if Class === name
+      @registry[name] || raise(UsageException, "Unknown command: #{name}")
     end
 
     attr_reader :usage
@@ -1060,7 +1057,14 @@ EOF
   end
 
   def make_command(name)
-    Basketcase.make_command(self, name)
+    command_class = Basketcase.command_class(name)
+    command = command_class.new(self)
+    yield command if block_given?
+    command
+  end
+
+  def exec_command(name, &block)
+    make_command(name, &block).execute
   end
 
   #---( Command-line processing )---
