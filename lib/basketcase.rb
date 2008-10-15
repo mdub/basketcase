@@ -129,13 +129,9 @@ EOF
   end
 
   # Object responsible for nice fomatting of output
-  class DefaultListener
-
-    def report(element)
-      printf("%-7s %-15s %s\n", element.status,
-        element.base_version, element.path)
-    end
-
+  DefaultListener = lambda do |element|
+    printf("%-7s %-15s %s\n", element.status,
+      element.base_version, element.path)
   end
 
   #---( Target list )---
@@ -198,7 +194,7 @@ EOF
 
     def initialize(basketcase)
       @basketcase = basketcase
-      @listener = DefaultListener.new
+      @listener = DefaultListener
       @recursive = false
       @graphical = false
     end
@@ -207,7 +203,7 @@ EOF
     attr_writer :targets
 
     def report(status, path, version = nil)
-      @listener.report(ElementStatus.new(path, status, version))
+      @listener.call(ElementStatus.new(path, status, version))
     end
 
     def option_recurse
@@ -642,28 +638,14 @@ EOF
 
   end
 
-  class CollectingListener
-
-    attr_reader :elements
-
-    def initialize
-      @elements = []
-    end
-
-    def report(element)
-      @elements << element
-    end
-
-  end
-
   class DirectoryModificationCommand < Command
 
     def find_locked_elements(paths)
-      collector = CollectingListener.new
-      run(LsCommand, '-a', '-d', *paths) do |ls|
-        ls.listener = collector
+      locked_elements = []
+      run(LsCommand, '-a', '-d', *paths) do |e|
+        locked_elements << e.path if e.status == :OK
       end
-      collector.elements.find_all { |e| e.status == :OK }.collect { |e| e.path }
+      locked_elements
     end
 
     def checkout(target_list)
@@ -846,16 +828,16 @@ EOF
 
   class AutoCommand < Command
 
-    def list_elements
-      collector = CollectingListener.new
-      run(LsCommand, '-r', *effective_targets) do |ls|
-        ls.listener = collector
-      end
-      collector.elements
+    def each_element(&block)
+      run(LsCommand, '-r', *effective_targets, &block)
     end
 
     def find_checkouts
-      list_elements.find_all { |e| e.status == :CO }.collect { |e| e.path }
+      checkouts = []
+      each_element do |e|
+        checkouts << e.path if e.status == :CO
+      end
+      checkouts
     end
 
   end
@@ -933,7 +915,7 @@ EOF
     alias :option_n :option_noprompt
 
     def collect_actions
-      list_elements.each do |e|
+      each_element do |e|
         case e.status
         when :LOCAL
           @actions << ['add', e.path]
@@ -1033,16 +1015,13 @@ EOF
   end
 
   def make_command(name)
-    command_class = Basketcase.command_class(name)
-    command = command_class.new(self)
-    yield command if block_given?
-    command
+    Basketcase.command_class(name).new(self)
   end
 
   def run(name, *args, &block)
     command = make_command(name)
     command.accept_args(args) if args
-    yield command if block_given?
+    command.listener = block if block_given?
     command.execute
   end
 
