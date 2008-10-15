@@ -19,8 +19,6 @@ COMMANDS        (type 'basketcase help <command>' for details)
 
 EOF
 
-  #---( Logging/testing )---
-
   def log_debug(msg)
     return unless @debug_mode
     $stderr.puts(msg)
@@ -29,8 +27,6 @@ EOF
   def just_testing?
     @test_mode
   end
-
-  #---( Utilities )---
 
   module Utils
 
@@ -45,8 +41,6 @@ EOF
   end
 
   include Utils
-
-  #---( Ignorance is bliss )---
 
   def ignored?(path)
     path = Pathname(path).expand_path
@@ -103,8 +97,6 @@ EOF
 
   public
 
-  #---( Output formatting )---
-
   # Represents the status of an element
   class ElementStatus
 
@@ -129,8 +121,6 @@ EOF
     printf("%-7s %-15s %s\n", element.status,
       element.base_version, element.path)
   end
-
-  #---( Target list )---
 
   class TargetList
 
@@ -165,12 +155,8 @@ EOF
 
   end
 
-  #---( Errors )---
-
   class UsageException < Exception
   end
-
-  #---( Commands )---
 
   # Base ClearCase command
   class Command
@@ -966,8 +952,6 @@ EOF
 
   end
 
-  #---( Register commands )---
-
   @registry = {}
 
   class << self
@@ -1019,8 +1003,6 @@ EOF
     command.listener = block if block_given?
     command.execute
   end
-
-  #---( Command-line processing )---
 
   def sync_io
     $stdout.sync = true
