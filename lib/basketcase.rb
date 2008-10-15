@@ -186,7 +186,7 @@ EOF
     include Basketcase::Utils
 
     extend Forwardable
-    def_delegators :@basketcase, :log_debug, :just_testing?, :ignored?, :make_command, :exec_command
+    def_delegators :@basketcase, :log_debug, :just_testing?, :ignored?, :make_command, :run
 
     def synopsis
       ""
@@ -313,7 +313,7 @@ EOF
         exit
       end
       @targets.each do |command_name|
-        command = @basketcase.make_command(command_name)
+        command = make_command(command_name)
         puts
         puts "% basketcase #{command_name} #{command.synopsis}"
         puts
@@ -660,10 +660,7 @@ EOF
 
     def find_locked_elements(paths)
       collector = CollectingListener.new
-      exec_command(LsCommand) do |ls|
-        ls.option_a
-        ls.option_d
-        ls.targets = paths
+      run(LsCommand, '-a', '-d', *paths) do |ls|
         ls.listener = collector
       end
       collector.elements.find_all { |e| e.status == :OK }.collect { |e| e.path }
@@ -671,7 +668,7 @@ EOF
 
     def checkout(target_list)
       return if target_list.empty?
-      exec_command(CheckoutCommand) { |co| co.targets = target_list }
+      run(CheckoutCommand, *target_list)
     end
 
     def unlock_parent_directories(target_list)
@@ -851,9 +848,7 @@ EOF
 
     def list_elements
       collector = CollectingListener.new
-      exec_command(LsCommand) do |ls|
-        ls.option_r
-        ls.targets = effective_targets
+      run(LsCommand, '-r', *effective_targets) do |ls|
         ls.listener = collector
       end
       collector.elements
@@ -883,10 +878,7 @@ EOF
         puts "Nothing to check-in"
         return
       end
-      exec_command(CheckinCommand) do |ci|
-        ci.comment = self.comment
-        ci.targets = checked_out_elements
-      end
+      run(CheckinCommand, '-m', comment, *checked_out_elements)
     end
 
   end
@@ -909,10 +901,7 @@ EOF
         puts "Nothing to revert"
         return
       end
-      unco = @basketcase.make_command(UncheckoutCommand)
-      unco.option_remove
-      unco.targets = checked_out_elements
-      unco.execute
+      run(UncheckoutCommand, '-r', *checked_out_elements)
     end
 
   end
@@ -980,24 +969,17 @@ EOF
 
     def apply_actions
       elements_to_add = @actions.map { |a| a[1] if a[0] == 'add' }.compact
+      apply_command([AddCommand], elements_to_add)
+
       elements_to_remove = @actions.map { |a| a[1] if a[0] == 'rm' }.compact
+      apply_command([RemoveCommand], elements_to_remove)
+
       elements_to_replace = @actions.map { |a| a[1] if a[0] == 'co -h' }.compact
-      apply_command(make_command(AddCommand), elements_to_add)
-      apply_command(checkout_hijacked_command, elements_to_replace)
-      apply_command(make_command(RemoveCommand), elements_to_remove)
+      apply_command([CheckoutCommand, '-h'], elements_to_replace)
     end
 
-    def apply_command(command, targets)
-      return if targets.empty?
-      command.targets = targets
-      command.execute
-    end
-
-
-    def checkout_hijacked_command
-      cmd = make_command(CheckoutCommand)
-      cmd.option_hijack
-      cmd
+    def apply_command(cmd, elements)
+      run(*(cmd + elements)) unless elements.empty?
     end
 
     def execute
@@ -1063,8 +1045,11 @@ EOF
     command
   end
 
-  def exec_command(name, &block)
-    make_command(name, &block).execute
+  def run(name, *args, &block)
+    command = make_command(name)
+    command.accept_args(args) if args
+    yield command if block_given?
+    command.execute
   end
 
   #---( Command-line processing )---
@@ -1095,9 +1080,7 @@ EOF
       handle_global_options
       define_standard_ignore_patterns
       load_project_ignore_patterns
-      @command = make_command(@args.shift)
-      @command.accept_args(@args)
-      @command.execute
+      run(*@args)
     rescue UsageException => usage
       $stderr.puts "ERROR: #{usage.message}"
       $stderr.puts
