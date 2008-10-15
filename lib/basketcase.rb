@@ -101,10 +101,6 @@ EOF
     @ignore_patterns_loaded[dir] = true
   end
 
-  def load_project_ignore_patterns
-    require_ignore_patterns_for(Pathname.pwd)
-  end
-
   public
 
   #---( Output formatting )---
@@ -982,7 +978,6 @@ EOF
     end
 
     def command_class(name)
-      raise UsageException, "no command specified" if name.nil?
       return name if Class === name
       @registry[name] || raise(UsageException, "Unknown command: #{name}")
     end
@@ -1051,8 +1046,8 @@ EOF
     begin
       sync_io
       handle_global_options
+      raise UsageException, "no command specified" if @args.empty?
       define_standard_ignore_patterns
-      load_project_ignore_patterns
       run(*@args)
     rescue UsageException => usage
       $stderr.puts "ERROR: #{usage.message}"
