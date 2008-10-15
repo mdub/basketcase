@@ -20,7 +20,7 @@ FIX (describe your package)
 
 == INSTALL:
 
-* FIX (sudo gem install, anything else)
+* sudo gem install basketcase
 
 == LICENSE:
 
