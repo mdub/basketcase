@@ -968,18 +968,12 @@ EOF
     end
 
     def apply_actions
-      elements_to_add = @actions.map { |a| a[1] if a[0] == 'add' }.compact
-      apply_command([AddCommand], elements_to_add)
-
-      elements_to_remove = @actions.map { |a| a[1] if a[0] == 'rm' }.compact
-      apply_command([RemoveCommand], elements_to_remove)
-
-      elements_to_replace = @actions.map { |a| a[1] if a[0] == 'co -h' }.compact
-      apply_command([CheckoutCommand, '-h'], elements_to_replace)
-    end
-
-    def apply_command(cmd, elements)
-      run(*(cmd + elements)) unless elements.empty?
+      ['add', 'rm', 'co -h'].each do |command|
+        elements = @actions.map { |a| a[1] if a[0] == command }.compact
+        unless elements.empty?
+          run(*(command.split(' ') + elements))
+        end
+      end
     end
 
     def execute
