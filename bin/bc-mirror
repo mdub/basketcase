@@ -1,0 +1,127 @@
+#! /usr/bin/env ruby
+
+# Synchronise a directory with a Clearcase snapshot view.
+#
+# @author Mike Williams
+
+$LOAD_PATH.unshift(File.expand_path(File.dirname(__FILE__) + "/../lib"))
+
+require 'basketcase'
+require 'pathname'
+require 'ftools'
+
+class DirSyncer
+
+  def initialize(src_root, dest_root)
+    @src_root = Pathname(src_root)
+    @dest_root = Pathname(dest_root)
+  end
+
+  def sync
+    visit(@src_root)
+    cleanup(@dest_root)
+  end
+
+  private
+
+  def ignored?(path)
+    path.to_str =~ %r{(^|/).git($|/)}
+  end
+
+  def visit(src_file)
+    return if ignored?(src_file)
+    if src_file.directory?
+      sync_dir(src_file)
+    else
+      sync_file(src_file)
+    end
+  end
+
+  def ensure_we_can_write_to(file)
+    file.chmod(file.stat.mode | 0600) unless file.writable?
+  end
+
+  def sync_dir(src_dir)
+    src_dir.children.sort.each do |f|
+      visit(f)
+    end
+  end
+
+  def sync_file(src_file)
+    file_path = src_file.relative_path_from(@src_root)
+    dest_file = @dest_root + file_path
+    dest_file.parent.mkpath
+    ensure_we_can_write_to(dest_file.parent)
+    if dest_file.exist?
+      if File.read(src_file) == File.read(dest_file)
+        return
+      end
+      ensure_we_can_write_to(dest_file)
+    end
+    puts file_path
+    FileUtils.copy(src_file, dest_file)
+  end
+
+  def cleanup(dest_file)
+    if dest_file.directory?
+      cleanup_dir(dest_file)
+    else
+      cleanup_file(dest_file)
+    end
+  end
+
+  def cleanup_dir(dest_dir)
+    dest_dir.children.sort.each do |f|
+      cleanup(f)
+    end
+    if dest_dir.children.empty?
+      puts "rmdir #{dest_dir.relative_path_from(@dest_root)}"
+      dest_dir.rmdir
+    end
+  end
+
+  def cleanup_file(dest_file)
+    file_path = dest_file.relative_path_from(@dest_root)
+    src_file = @src_root + file_path
+    if !src_file.exist? || ignored?(file_path)
+      ensure_we_can_write_to(dest_file.parent)
+      puts "rm #{file_path}"
+      dest_file.delete
+    end
+  end
+
+end
+
+#---( Mainline )---
+
+def exit_with(status, message)
+  $stderr.puts message; exit(status)
+end
+
+exit_with(3, "usage: #{File.basename($0)} <source> <clearcase_snapshot>") unless ARGV.size == 2
+
+source_dir, cc_snapshot_dir = ARGV
+source_dir = Pathname(source_dir).expand_path
+cc_snapshot_dir = Pathname(cc_snapshot_dir).expand_path
+
+def check_dir(dir)
+  exit_with(5, "ERROR: no such directory? #{dir}") unless dir.exist?
+  exit_with(5, "ERROR: #{dir} is not a directory") unless dir.directory?
+end
+
+check_dir(source_dir)
+check_dir(cc_snapshot_dir)
+
+puts "--- Syncing to CC view"
+DirSyncer.new(source_dir, cc_snapshot_dir).sync
+
+Dir.chdir(cc_snapshot_dir)
+basketcase = Basketcase.new
+
+puts "--- Adding/removing stuff"
+basketcase.do('auto-sync', '-n')
+
+puts "--- Commiting"
+basketcase.do('auto-commit', '-m', "upload from #{source_dir}")
+
+puts "--- Done"
