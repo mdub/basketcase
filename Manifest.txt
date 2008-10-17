@@ -3,4 +3,5 @@ Manifest.txt
 README.txt
 Rakefile
 bin/basketcase
+bin/bc-mirror
 lib/basketcase.rb
