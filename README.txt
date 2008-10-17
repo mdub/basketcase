@@ -1,5 +1,11 @@
 = basketcase
 
+* http://basketcase.rubyforge.org/
+* http://rubyforge.org/projects/basketcase/
+* http://dogbiscuit.org/mdub/
+
+== Description
+
 BasketCase is a (Ruby) script that encapsulates the Rational ClearCase
 command-line interface, <code>cleartool</code>, making it (slightly) more
 comfortable for developers more used to non-locking version-control systems
@@ -76,11 +82,6 @@ way:
 * There is no easy way to do a bulk-commit from the command-line.
 
 Mike wrote BasketCase in frustration.
-
-== See also
-
-* http://rubyforge.org/projects/basketcase/
-* http://dogbiscuit.org/mdub/
 
 == License
 
