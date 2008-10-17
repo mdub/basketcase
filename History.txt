@@ -1,3 +1,8 @@
+=== 1.1.0 / 2008-09-17
+
+* Add 'bc-mirror' script, to support periodically publishing an
+  externally-managed directory into ClearCase.
+
 === 1.0.0 / 2008-09-16
 
 * Converted into a gem, using sow.

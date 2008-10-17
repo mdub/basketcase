@@ -3,7 +3,7 @@ require 'forwardable'
 
 class Basketcase
 
-  VERSION = '1.0.0'
+  VERSION = '1.1.0'
 
   @usage = <<EOF
 usage: basketcase <command> [<options>]
